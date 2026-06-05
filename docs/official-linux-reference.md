@@ -21,4 +21,5 @@ Fonte local analisada:
 
 - O CLI prioriza `firmware/isdbt_nova_12mhz_b0_official_2010.inp` quando esse arquivo existir.
 - O modo `diag-br` testa `1seg`, `13seg` e `3seg`, com offsets em torno do centro do canal.
+- O modo alternativo `SIANO_TV_MODE=isdbt-bda` inicializa o dispositivo com `DEVICE_MODE_ISDBT_BDA`.
 - Para trocar de firmware depois que o dongle ja carregou um firmware, reinserir o dispositivo USB e rodar o teste novamente.

@@ -97,6 +97,7 @@ typedef struct sms_isdbt_stats_summary {
 #define SMS_BW_ISDBT_3SEG 5
 #define SMS_BW_ISDBT_13SEG 8
 #define SMS_DEVICE_MODE_ISDBT 5
+#define SMS_DEVICE_MODE_ISDBT_BDA 6
 
 static inline smsusb_device_info_t smsusb_known_device(void) {
     smsusb_device_info_t info = {
@@ -114,6 +115,7 @@ int smsusb_open(smsusb_device_t *device, char *error, unsigned long error_len);
 int smsusb_close(smsusb_device_t *device, char *error, unsigned long error_len);
 int smsusb_get_version(smsusb_device_t *device, sms_version_res_t *version, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_load_firmware(smsusb_device_t *device, const unsigned char *firmware, size_t firmware_size, char *error, unsigned long error_len);
+int smsusb_init_device_mode(smsusb_device_t *device, uint32_t mode, char *error, unsigned long error_len);
 int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_len);
 int smsusb_tune_isdbt(smsusb_device_t *device, uint32_t frequency_hz, char *error, unsigned long error_len);
 int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, uint32_t segment_width, char *error, unsigned long error_len);

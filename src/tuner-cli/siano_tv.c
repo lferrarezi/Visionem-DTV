@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|scan-br|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|scan-br|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 static int probe_command(void) {
@@ -150,7 +150,19 @@ static const char *find_isdbt_firmware(void) {
     return NULL;
 }
 
-static int ensure_isdbt_ready(smsusb_device_t *device, char *error, unsigned long error_len) {
+static uint32_t selected_isdbt_mode(void) {
+    const char *mode = getenv("SIANO_TV_MODE");
+    if (mode && strcmp(mode, "isdbt-bda") == 0) {
+        return SMS_DEVICE_MODE_ISDBT_BDA;
+    }
+    return SMS_DEVICE_MODE_ISDBT;
+}
+
+static const char *device_mode_name(uint32_t mode) {
+    return mode == SMS_DEVICE_MODE_ISDBT_BDA ? "ISDB-T BDA" : "ISDB-T";
+}
+
+static int ensure_isdbt_ready_mode(smsusb_device_t *device, uint32_t mode, char *error, unsigned long error_len) {
     sms_version_res_t version;
     int rc = smsusb_get_version(device, &version, 3000, error, error_len);
     if (rc != 0) {
@@ -180,7 +192,11 @@ static int ensure_isdbt_ready(smsusb_device_t *device, char *error, unsigned lon
         sleep(1);
     }
 
-    return smsusb_init_isdbt(device, error, error_len);
+    return smsusb_init_device_mode(device, mode, error, error_len);
+}
+
+static int ensure_isdbt_ready(smsusb_device_t *device, char *error, unsigned long error_len) {
+    return ensure_isdbt_ready_mode(device, selected_isdbt_mode(), error, error_len);
 }
 
 static int firmware_load_command(const char *path) {
@@ -277,7 +293,7 @@ static int init_isdbt_command(void) {
         return 1;
     }
 
-    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready_mode(&device, SMS_DEVICE_MODE_ISDBT, error, sizeof(error));
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
         fprintf(stderr, "init-isdbt failed: %s\n", error);
@@ -292,6 +308,35 @@ static int init_isdbt_command(void) {
 
     printf("siano-tv init-isdbt\n");
     printf("  mode: ISDB-T\n");
+    printf("  init request: ok\n");
+    return 0;
+}
+
+static int init_isdbt_bda_command(void) {
+    smsusb_device_t device;
+    char error[256];
+
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "init-isdbt-bda failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready_mode(&device, SMS_DEVICE_MODE_ISDBT_BDA, error, sizeof(error));
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "init-isdbt-bda failed: %s\n", error);
+        return 1;
+    }
+
+    rc = smsusb_close(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "close failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv init-isdbt-bda\n");
+    printf("  mode: ISDB-T BDA\n");
     printf("  init request: ok\n");
     return 0;
 }
@@ -747,6 +792,7 @@ static int diag_br_command(int argc, char **argv) {
 
     printf("siano-tv diag-br\n");
     printf("  sistema: ISDB-Tb Brasil\n");
+    printf("  init mode: %s\n", device_mode_name(selected_isdbt_mode()));
     printf("  canal: %lu\n", channel);
     printf("  centro: %u Hz\n", center_frequency);
     printf("  seconds_per_trial: %lu\n", seconds_per_trial);
@@ -770,7 +816,7 @@ static int diag_br_command(int argc, char **argv) {
                     }
                     if (rc != 0) {
                         printf("  usb_reopen_failed=%s\n", error);
-                        break;
+                        goto done;
                     }
                     printf("  usb_reopened=1\n");
                 }
@@ -804,7 +850,7 @@ static int diag_br_command(int argc, char **argv) {
                     }
                     if (rc != 0) {
                         printf("  usb_reopen_failed=%s\n", error);
-                        break;
+                        goto done;
                     }
                     printf("  usb_reopened=1\n");
                 }
@@ -854,6 +900,7 @@ static int diag_br_command(int argc, char **argv) {
         }
     }
 
+done:
     smsusb_close(&device, error, sizeof(error));
     fclose(csv);
 
@@ -1150,6 +1197,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && strcmp(argv[1], "init-isdbt") == 0) {
         return init_isdbt_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "init-isdbt-bda") == 0) {
+        return init_isdbt_bda_command();
     }
     if (argc == 2 && strcmp(argv[1], "scan-isdbt") == 0) {
         return scan_isdbt_command();

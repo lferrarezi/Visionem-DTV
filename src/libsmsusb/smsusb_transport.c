@@ -358,7 +358,7 @@ typedef struct sms_msg_data1 {
     uint32_t data;
 } sms_msg_data1_t;
 
-int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_len) {
+int smsusb_init_device_mode(smsusb_device_t *device, uint32_t mode, char *error, unsigned long error_len) {
     if (!device || !device->handle) {
         set_error(error, error_len, "invalid init arguments");
         return -1;
@@ -367,7 +367,7 @@ int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_
     sms_msg_data1_t init;
     memset(&init, 0, sizeof(init));
     sms_msg_init(&init.header, SMS_MSG_INIT_DEVICE_REQ, sizeof(init));
-    init.data = SMS_DEVICE_MODE_ISDBT;
+    init.data = mode;
 
     int rc = smsusb_send_and_wait(
         device,
@@ -386,6 +386,10 @@ int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_
 
     set_error(error, error_len, "");
     return 0;
+}
+
+int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_len) {
+    return smsusb_init_device_mode(device, SMS_DEVICE_MODE_ISDBT, error, error_len);
 }
 
 int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, uint32_t segment_width, char *error, unsigned long error_len) {
