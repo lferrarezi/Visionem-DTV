@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#define SMSUSB_LARGE_MESSAGE_SIZE 32768
+
 static void set_error(char *error, unsigned long error_len, const char *message) {
     if (!error || error_len == 0) {
         return;
@@ -392,6 +394,86 @@ int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_
     return smsusb_init_device_mode(device, SMS_DEVICE_MODE_ISDBT, error, error_len);
 }
 
+int smsusb_set_max_tx_msg_len(smsusb_device_t *device, uint32_t length, char *error, unsigned long error_len) {
+    if (!device || !device->handle) {
+        set_error(error, error_len, "invalid set_max_tx_msg_len arguments");
+        return -1;
+    }
+
+    sms_msg_data1_t request;
+    memset(&request, 0, sizeof(request));
+    sms_msg_init_ex(
+        &request.header,
+        SMS_MSG_SET_MAX_TX_MSG_LEN_REQ,
+        0,
+        SMS_HIF_TASK,
+        sizeof(request)
+    );
+    request.data = length;
+
+    int rc = smsusb_send(device, &request, sizeof(request), error, error_len);
+    if (rc < 0) {
+        return -1;
+    }
+
+    set_error(error, error_len, "");
+    return 0;
+}
+
+static int smsusb_send_header_command(smsusb_device_t *device, uint16_t request_type, uint16_t response_type, char *error, unsigned long error_len) {
+    if (!device || !device->handle) {
+        set_error(error, error_len, "invalid header command arguments");
+        return -1;
+    }
+
+    sms_msg_hdr_t request;
+    sms_msg_init_ex(
+        &request,
+        request_type,
+        SMS_DVBT_BDA_CONTROL_MSG_ID,
+        SMS_HIF_TASK,
+        sizeof(request)
+    );
+
+    int rc = smsusb_send_and_wait(
+        device,
+        &request,
+        sizeof(request),
+        response_type,
+        3000,
+        NULL,
+        0,
+        error,
+        error_len
+    );
+    if (rc < 0) {
+        return -1;
+    }
+
+    set_error(error, error_len, "");
+    return 0;
+}
+
+int smsusb_receive_1seg_through_fullseg(smsusb_device_t *device, char *error, unsigned long error_len) {
+    return smsusb_send_header_command(
+        device,
+        SMS_MSG_RECEIVE_1SEG_THROUGH_FULLSEG_REQ,
+        SMS_MSG_RECEIVE_1SEG_THROUGH_FULLSEG_RES,
+        error,
+        error_len
+    );
+}
+
+int smsusb_receive_vhf_via_vhf_input(smsusb_device_t *device, char *error, unsigned long error_len) {
+    return smsusb_send_header_command(
+        device,
+        SMS_MSG_RECEIVE_VHF_VIA_VHF_INPUT_REQ,
+        SMS_MSG_RECEIVE_VHF_VIA_VHF_INPUT_RES,
+        error,
+        error_len
+    );
+}
+
 int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, uint32_t segment_width, char *error, unsigned long error_len) {
     if (!device || !device->handle) {
         set_error(error, error_len, "invalid tune arguments");
@@ -436,6 +518,17 @@ int smsusb_tune_isdbt(smsusb_device_t *device, uint32_t frequency_hz, char *erro
 }
 
 int smsusb_add_pid_filter(smsusb_device_t *device, uint32_t pid, char *error, unsigned long error_len) {
+    return smsusb_add_pid_filter_route(
+        device,
+        pid,
+        SMS_DVBT_BDA_CONTROL_MSG_ID,
+        SMS_HIF_TASK,
+        error,
+        error_len
+    );
+}
+
+int smsusb_add_pid_filter_route(smsusb_device_t *device, uint32_t pid, uint8_t src, uint8_t dst, char *error, unsigned long error_len) {
     if (!device || !device->handle) {
         set_error(error, error_len, "invalid add_pid_filter arguments");
         return -1;
@@ -446,8 +539,8 @@ int smsusb_add_pid_filter(smsusb_device_t *device, uint32_t pid, char *error, un
     sms_msg_init_ex(
         &pid_msg.header,
         SMS_MSG_ADD_PID_FILTER_REQ,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
+        src,
+        dst,
         sizeof(pid_msg)
     );
     pid_msg.data = pid;
@@ -474,7 +567,7 @@ int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t
     }
 
     *size_out = 0;
-    unsigned char message[8192];
+    unsigned char message[SMSUSB_LARGE_MESSAGE_SIZE];
     int transferred = 0;
     libusb_device_handle *handle = (libusb_device_handle *)device->handle;
     int rc = libusb_bulk_transfer(
@@ -530,7 +623,7 @@ int smsusb_read_message_header(smsusb_device_t *device, sms_msg_hdr_t *header_ou
         return -1;
     }
 
-    unsigned char message[8192];
+    unsigned char message[SMSUSB_LARGE_MESSAGE_SIZE];
     int transferred = 0;
     libusb_device_handle *handle = (libusb_device_handle *)device->handle;
     int rc = libusb_bulk_transfer(
@@ -636,7 +729,7 @@ int smsusb_get_isdbt_stats(smsusb_device_t *device, sms_isdbt_stats_summary_t *s
         sizeof(request)
     );
 
-    unsigned char response[8192];
+    unsigned char response[SMSUSB_LARGE_MESSAGE_SIZE];
     int rc = smsusb_send_and_wait(
         device,
         &request,
@@ -681,7 +774,7 @@ int smsusb_get_isdbt_stats_ex(smsusb_device_t *device, sms_isdbt_stats_summary_t
         sizeof(request)
     );
 
-    unsigned char response[8192];
+    unsigned char response[SMSUSB_LARGE_MESSAGE_SIZE];
     int rc = smsusb_send_and_wait(
         device,
         &request,

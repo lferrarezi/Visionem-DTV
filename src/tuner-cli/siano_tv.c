@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -166,6 +166,19 @@ static const char *device_mode_name(uint32_t mode) {
     return mode == SMS_DEVICE_MODE_ISDBT_BDA ? "ISDB-T BDA" : "ISDB-T";
 }
 
+static uint8_t env_u8_or_default(const char *name, uint8_t fallback) {
+    const char *value = getenv(name);
+    if (!value || !*value) {
+        return fallback;
+    }
+    char *end = NULL;
+    unsigned long parsed = strtoul(value, &end, 0);
+    if (end == value || *end != '\0' || parsed > 255) {
+        return fallback;
+    }
+    return (uint8_t)parsed;
+}
+
 static int ensure_isdbt_ready_mode(smsusb_device_t *device, uint32_t mode, char *error, unsigned long error_len) {
     sms_version_res_t version;
     int rc = smsusb_get_version(device, &version, 3000, error, error_len);
@@ -196,11 +209,67 @@ static int ensure_isdbt_ready_mode(smsusb_device_t *device, uint32_t mode, char 
         sleep(1);
     }
 
-    return smsusb_init_device_mode(device, mode, error, error_len);
+    rc = smsusb_init_device_mode(device, mode, error, error_len);
+    if (rc != 0) {
+        return -1;
+    }
+
+    return smsusb_set_max_tx_msg_len(device, 15792, error, error_len);
 }
 
 static int ensure_isdbt_ready(smsusb_device_t *device, char *error, unsigned long error_len) {
     return ensure_isdbt_ready_mode(device, selected_isdbt_mode(), error, error_len);
+}
+
+static void prepare_reception_best_effort(smsusb_device_t *device) {
+    char local_error[256];
+    int rc = smsusb_set_max_tx_msg_len(device, 15792, local_error, sizeof(local_error));
+    printf("  prepare max-tx-msg-len 15792: %s%s%s\n",
+           rc == 0 ? "ok" : "erro",
+           rc == 0 ? "" : " ",
+           rc == 0 ? "" : local_error);
+
+    rc = smsusb_receive_1seg_through_fullseg(device, local_error, sizeof(local_error));
+    printf("  prepare 1seg-through-fullseg: %s%s%s\n",
+           rc == 0 ? "ok" : "erro",
+           rc == 0 ? "" : " ",
+           rc == 0 ? "" : local_error);
+
+    rc = smsusb_receive_vhf_via_vhf_input(device, local_error, sizeof(local_error));
+    printf("  prepare vhf-via-vhf-input: %s%s%s\n",
+           rc == 0 ? "ok" : "erro",
+           rc == 0 ? "" : " ",
+           rc == 0 ? "" : local_error);
+    fflush(stdout);
+}
+
+static void prepare_reception_experimental_if_enabled(smsusb_device_t *device) {
+    const char *enabled = getenv("SIANO_TV_EXPERIMENTAL_PREP");
+    if (enabled && strcmp(enabled, "1") == 0) {
+        prepare_reception_best_effort(device);
+    }
+}
+
+static int prepare_reception_command(void) {
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "prepare-reception failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "prepare-reception failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv prepare-reception\n");
+    prepare_reception_best_effort(&device);
+    smsusb_close(&device, error, sizeof(error));
+    return 0;
 }
 
 static int firmware_load_command(const char *path) {
@@ -468,6 +537,10 @@ static const char *msg_name(uint16_t type) {
         return "MSG_SMS_DVBT_BDA_DATA";
     case SMS_MSG_ISDBT_TUNE_RES:
         return "MSG_SMS_ISDBT_TUNE_RES";
+    case SMS_MSG_RECEIVE_1SEG_THROUGH_FULLSEG_RES:
+        return "MSG_SMS_RECEIVE_1SEG_THROUGH_FULLSEG_RES";
+    case SMS_MSG_RECEIVE_VHF_VIA_VHF_INPUT_RES:
+        return "MSG_SMS_RECEIVE_VHF_VIA_VHF_INPUT_RES";
     case SMS_MSG_INTERFACE_LOCK_IND:
         return "MSG_SMS_INTERFACE_LOCK_IND";
     case SMS_MSG_INTERFACE_UNLOCK_IND:
@@ -844,6 +917,7 @@ static int debug_channel_br_command(int argc, char **argv) {
         fprintf(stderr, "debug-channel-br failed: %s\n", error);
         return 1;
     }
+    prepare_reception_experimental_if_enabled(&device);
 
     printf("siano-tv debug-channel-br\n");
     printf("  sistema: ISDB-Tb Brasil\n");
@@ -1402,6 +1476,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
     uint32_t selected_mode = SMS_BW_ISDBT_13SEG;
     rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc == 0) {
+        prepare_reception_experimental_if_enabled(&device);
         rc = choose_watch_mode(&device, (uint32_t)frequency, &selected_mode, error, sizeof(error));
     }
     if (rc != 0) {
@@ -1432,9 +1507,12 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         usleep(250000);
     }
 
+    uint8_t pid_src = env_u8_or_default("SIANO_TV_PID_SRC", SMS_DVBT_BDA_CONTROL_MSG_ID);
+    uint8_t pid_dst = env_u8_or_default("SIANO_TV_PID_DST", SMS_HIF_TASK);
+    printf("  pid route: src=%u dst=%u\n", pid_src, pid_dst);
     const uint32_t pids[] = {0x2000, 0x0000, 0x0010, 0x0011, 0x0012, 0x0014, 0x1fff};
     for (size_t i = 0; i < sizeof(pids) / sizeof(pids[0]); i++) {
-        rc = smsusb_add_pid_filter(&device, pids[i], error, sizeof(error));
+        rc = smsusb_add_pid_filter_route(&device, pids[i], pid_src, pid_dst, error, sizeof(error));
         if (rc != 0) {
             smsusb_close(&device, error, sizeof(error));
             fclose(out);
@@ -1455,15 +1533,46 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
     unsigned char ts_buffer[8192];
     size_t total = 0;
     int launched_player = 0;
+    unsigned long non_ts_messages = 0;
+    unsigned long read_timeouts = 0;
     time_t start = time(NULL);
     time_t next_stats = start;
     time_t end_time = start + (time_t)seconds;
 
     while (time(NULL) < end_time) {
-        size_t packet_size = 0;
-        rc = smsusb_read_ts_packet(&device, ts_buffer, sizeof(ts_buffer), &packet_size, 250, error, sizeof(error));
+        unsigned char raw_message[32768];
+        size_t raw_size = 0;
+        rc = smsusb_read_raw_message(&device, raw_message, sizeof(raw_message), &raw_size, 250, error, sizeof(error));
         if (rc != 0) {
             break;
+        }
+        if (raw_size == 0) {
+            read_timeouts++;
+        }
+
+        size_t packet_size = 0;
+        if (raw_size >= sizeof(sms_msg_hdr_t)) {
+            sms_msg_hdr_t *header = (sms_msg_hdr_t *)raw_message;
+            if (header->msg_type == SMS_MSG_DVBT_BDA_DATA && header->msg_length >= sizeof(sms_msg_hdr_t)) {
+                packet_size = header->msg_length - sizeof(sms_msg_hdr_t);
+                if (packet_size > sizeof(ts_buffer)) {
+                    snprintf(error, sizeof(error), "TS payload %lu exceeds buffer %lu", (unsigned long)packet_size, (unsigned long)sizeof(ts_buffer));
+                    rc = -1;
+                    break;
+                }
+                memcpy(ts_buffer, raw_message + sizeof(sms_msg_hdr_t), packet_size);
+            } else {
+                non_ts_messages++;
+                if (non_ts_messages <= 20 || (non_ts_messages % 25) == 0) {
+                    printf("  raw msg type=%u %s length=%u src=%u dst=%u flags=0x%04x\n",
+                           header->msg_type,
+                           msg_name(header->msg_type),
+                           header->msg_length,
+                           header->msg_src_id,
+                           header->msg_dst_id,
+                           header->msg_flags);
+                }
+            }
         }
         if (packet_size > 0) {
             if (fwrite(ts_buffer, 1, packet_size, out) != packet_size) {
@@ -1501,6 +1610,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
             } else {
                 printf("  t=%lds stats_error=%s bytes=%lu\n", (long)(now - start), error, (unsigned long)total);
             }
+            printf("  usb raw: non_ts=%lu timeouts=%lu\n", non_ts_messages, read_timeouts);
             fflush(stdout);
             next_stats = now + 1;
         }
@@ -1573,6 +1683,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && strcmp(argv[1], "init-isdbt-bda") == 0) {
         return init_isdbt_bda_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "prepare-reception") == 0) {
+        return prepare_reception_command();
     }
     if (argc == 2 && strcmp(argv[1], "scan-isdbt") == 0) {
         return scan_isdbt_command();

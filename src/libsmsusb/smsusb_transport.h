@@ -74,6 +74,8 @@ typedef struct sms_isdbt_stats_summary {
 } sms_isdbt_stats_summary_t;
 
 #define SMS_HIF_TASK 11
+#define SMS_MSG_SET_MAX_TX_MSG_LEN_REQ 516
+#define SMS_MSG_SET_MAX_TX_MSG_LEN_RES 517
 #define SMS_MSG_GET_VERSION_EX_REQ 668
 #define SMS_MSG_GET_VERSION_EX_RES 669
 #define SMS_MSG_DATA_DOWNLOAD_REQ 660
@@ -82,6 +84,10 @@ typedef struct sms_isdbt_stats_summary {
 #define SMS_MSG_DATA_VALIDITY_RES 663
 #define SMS_MSG_SWDOWNLOAD_TRIGGER_REQ 664
 #define SMS_MSG_SWDOWNLOAD_TRIGGER_RES 665
+#define SMS_MSG_RECEIVE_1SEG_THROUGH_FULLSEG_REQ 528
+#define SMS_MSG_RECEIVE_1SEG_THROUGH_FULLSEG_RES 529
+#define SMS_MSG_RECEIVE_VHF_VIA_VHF_INPUT_REQ 530
+#define SMS_MSG_RECEIVE_VHF_VIA_VHF_INPUT_RES 531
 #define SMS_MSG_ISDBT_TUNE_REQ 776
 #define SMS_MSG_ISDBT_TUNE_RES 777
 #define SMS_MSG_DVBT_BDA_DATA 693
@@ -127,9 +133,13 @@ int smsusb_get_version(smsusb_device_t *device, sms_version_res_t *version, unsi
 int smsusb_load_firmware(smsusb_device_t *device, const unsigned char *firmware, size_t firmware_size, char *error, unsigned long error_len);
 int smsusb_init_device_mode(smsusb_device_t *device, uint32_t mode, char *error, unsigned long error_len);
 int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_len);
+int smsusb_set_max_tx_msg_len(smsusb_device_t *device, uint32_t length, char *error, unsigned long error_len);
+int smsusb_receive_1seg_through_fullseg(smsusb_device_t *device, char *error, unsigned long error_len);
+int smsusb_receive_vhf_via_vhf_input(smsusb_device_t *device, char *error, unsigned long error_len);
 int smsusb_tune_isdbt(smsusb_device_t *device, uint32_t frequency_hz, char *error, unsigned long error_len);
 int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, uint32_t segment_width, char *error, unsigned long error_len);
 int smsusb_add_pid_filter(smsusb_device_t *device, uint32_t pid, char *error, unsigned long error_len);
+int smsusb_add_pid_filter_route(smsusb_device_t *device, uint32_t pid, uint8_t src, uint8_t dst, char *error, unsigned long error_len);
 int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_read_message_header(smsusb_device_t *device, sms_msg_hdr_t *header_out, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_read_raw_message(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len);

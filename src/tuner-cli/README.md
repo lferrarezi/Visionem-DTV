@@ -17,6 +17,7 @@ Comandos esperados:
 ./build/siano-tv probe
 ./build/siano-tv version
 ./build/siano-tv firmware-load firmware/isdbt_nova_12mhz_b0.inp
+./build/siano-tv prepare-reception
 ./build/siano-tv tune-isdbt 473142857
 ./build/siano-tv capture-isdbt 473142857 10 capture.ts
 ./build/siano-tv scan-isdbt
@@ -46,6 +47,8 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 `diag-br` testa offsets finos e modos `1seg`, `13seg` e `3seg`, gravando CSV para comparar combinacoes.
 
 `debug-channel-br` faz uma leitura fina por canal brasileiro: testa `1seg`, `13seg` e `3seg`, imprime cada mensagem recebida do firmware, resume contagem por tipo, compara estatistica normal e expandida, e indica se algum payload MPEG-TS apareceu.
+
+`watch-br` configura MTU `15792`, imprime contadores de mensagens brutas e aceita `SIANO_TV_PID_SRC` / `SIANO_TV_PID_DST` para testar rotas alternativas de filtro PID.
 
 Estado validado no Mac local:
 

@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.6.0`.
+Versao local: `1.6.1`.
 
 ## Estado Atual
 
@@ -68,6 +68,8 @@ O dispositivo informado nao aceita antena externa. Para teste real, mova o dongl
 
 Se `scan-br` ficar em `rf=1 demod=0`, rode `diag-br` e depois `debug-channel-br`. O `diag-br` testa offsets finos ao redor do centro do canal e variantes `1seg`, `13seg` e `3seg`, gravando CSV. O `debug-channel-br` sintoniza o canal fisico nos tres modos, registra mensagens brutas vindas do dispositivo, compara `GET_STATISTICS` e `GET_STATISTICS_EX`, e mostra se ha pacotes MPEG-TS.
 
+O `watch-br` aplica o MTU `15792` observado no driver Linux oficial para placas ONDA/MDTV, imprime contadores USB (`non_ts` e `timeouts`) e aceita rotas de filtro PID para diagnostico: `SIANO_TV_PID_SRC=<id>` e `SIANO_TV_PID_DST=<id>`. As preparacoes experimentais `1seg-through-fullseg` e `vhf-via-vhf-input` podem ser testadas com `prepare-reception` ou ativadas no fluxo normal com `SIANO_TV_EXPERIMENTAL_PREP=1`.
+
 ## Canalizacao Brasileira
 
 `scan-br` cobre canais fisicos 1-59 para maximizar a captura local sem varrer lixo de espectro. A leitura pratica e:
@@ -113,7 +115,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.6.0-macos-installer.pkg
+dist/siano-tv-1.6.1-macos-installer.pkg
 ```
 
 O instalador coloca:
