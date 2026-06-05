@@ -11,12 +11,13 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
 #define BR_SCAN_MAX_CHANNEL 59
 #define BR_SCAN_EXTENDED_MAX_CHANNEL 69
+#define SIANO_RAW_MESSAGE_SIZE 65536
 
 static void close_device_preserving_error(smsusb_device_t *device, char *error, unsigned long error_len);
 
@@ -711,6 +712,8 @@ static const char *msg_name(uint16_t type) {
     switch (type) {
     case SMS_MSG_DVBT_BDA_DATA:
         return "MSG_SMS_DVBT_BDA_DATA";
+    case SMS_MSG_DAB_CHANNEL:
+        return "MSG_SMS_DAB_CHANNEL";
     case SMS_MSG_DATA_MSG:
         return "MSG_SMS_DATA_MSG";
     case SMS_MSG_RAW_CAPTURE_START_RES:
@@ -1826,7 +1829,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
     time_t end_time = start + (time_t)seconds;
 
     while (time(NULL) < end_time) {
-        unsigned char raw_message[32768];
+        unsigned char raw_message[SIANO_RAW_MESSAGE_SIZE];
         size_t raw_size = 0;
         rc = smsusb_read_raw_message(&device, raw_message, sizeof(raw_message), &raw_size, 250, error, sizeof(error));
         if (rc != 0) {
@@ -1839,8 +1842,14 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         size_t packet_size = 0;
         if (raw_size >= sizeof(sms_msg_hdr_t)) {
             sms_msg_hdr_t *header = (sms_msg_hdr_t *)raw_message;
-            if (header->msg_type == SMS_MSG_DVBT_BDA_DATA && header->msg_length >= sizeof(sms_msg_hdr_t)) {
+            if ((header->msg_type == SMS_MSG_DVBT_BDA_DATA || header->msg_type == SMS_MSG_DAB_CHANNEL) &&
+                header->msg_length >= sizeof(sms_msg_hdr_t)) {
                 packet_size = header->msg_length - sizeof(sms_msg_hdr_t);
+                if ((packet_size % 188) != 0) {
+                    snprintf(error, sizeof(error), "TS payload %lu is not 188-byte aligned", (unsigned long)packet_size);
+                    rc = -1;
+                    break;
+                }
                 if (packet_size > sizeof(ts_buffer)) {
                     snprintf(error, sizeof(error), "TS payload %lu exceeds buffer %lu", (unsigned long)packet_size, (unsigned long)sizeof(ts_buffer));
                     rc = -1;
@@ -2040,7 +2049,7 @@ static int stream_kick_br_command(int argc, char **argv) {
     unsigned long timeouts = 0;
     time_t end_time = time(NULL) + 5;
     while (time(NULL) < end_time) {
-        unsigned char raw_message[32768];
+        unsigned char raw_message[SIANO_RAW_MESSAGE_SIZE];
         size_t raw_size = 0;
         rc = smsusb_read_raw_message(&device, raw_message, sizeof(raw_message), &raw_size, 500, error, sizeof(error));
         if (rc != 0) {
@@ -2064,6 +2073,87 @@ static int stream_kick_br_command(int argc, char **argv) {
     smsusb_close(&device, error, sizeof(error));
     printf("  summary messages=%lu timeouts=%lu\n", messages, timeouts);
     return 0;
+}
+
+static int dump_ts_command(const char *seconds_text, const char *out_path) {
+    unsigned long seconds = 0;
+    if (parse_ulong_arg(seconds_text, 1, 3600, &seconds) != 0) {
+        fprintf(stderr, "dump-ts failed: seconds invalido\n");
+        return 2;
+    }
+
+    FILE *out = open_output_file(out_path);
+    if (!out) {
+        fprintf(stderr, "dump-ts failed: could not open %s: %s\n", out_path, strerror(errno));
+        return 1;
+    }
+
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fclose(out);
+        fprintf(stderr, "dump-ts failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv dump-ts\n");
+    printf("  duration: %lu seconds\n", seconds);
+    printf("  output: %s\n", out_path);
+    fflush(stdout);
+
+    unsigned long messages = 0;
+    unsigned long timeouts = 0;
+    size_t total = 0;
+    time_t start = time(NULL);
+    time_t next_stats = start;
+    time_t end_time = start + (time_t)seconds;
+    while (time(NULL) < end_time) {
+        unsigned char raw_message[SIANO_RAW_MESSAGE_SIZE];
+        size_t raw_size = 0;
+        rc = smsusb_read_raw_message(&device, raw_message, sizeof(raw_message), &raw_size, 500, error, sizeof(error));
+        if (rc != 0) {
+            break;
+        }
+        if (raw_size == 0) {
+            timeouts++;
+        } else if (raw_size >= sizeof(sms_msg_hdr_t)) {
+            sms_msg_hdr_t *header = (sms_msg_hdr_t *)raw_message;
+            size_t payload_len = header->msg_length >= sizeof(sms_msg_hdr_t) ? header->msg_length - sizeof(sms_msg_hdr_t) : 0;
+            if ((header->msg_type == SMS_MSG_DVBT_BDA_DATA || header->msg_type == SMS_MSG_DAB_CHANNEL) &&
+                payload_len > 0 &&
+                (payload_len % 188) == 0) {
+                if (fwrite(raw_message + sizeof(sms_msg_hdr_t), 1, payload_len, out) != payload_len) {
+                    snprintf(error, sizeof(error), "write failed");
+                    rc = -1;
+                    break;
+                }
+                total += payload_len;
+            }
+            messages++;
+        }
+
+        time_t now = time(NULL);
+        if (now >= next_stats) {
+            printf("  t=%lds messages=%lu timeouts=%lu bytes=%lu\n",
+                   (long)(now - start),
+                   messages,
+                   timeouts,
+                   (unsigned long)total);
+            fflush(stdout);
+            next_stats = now + 1;
+        }
+    }
+
+    close_device_preserving_error(&device, error, sizeof(error));
+    fclose(out);
+    if (rc != 0) {
+        fprintf(stderr, "dump-ts failed: %s\n", error);
+        return 1;
+    }
+
+    printf("  final bytes: %lu\n", (unsigned long)total);
+    return total > 0 ? 0 : 1;
 }
 
 int main(int argc, char **argv) {
@@ -2122,6 +2212,9 @@ int main(int argc, char **argv) {
     }
     if ((argc == 3 || argc == 4) && strcmp(argv[1], "stream-kick-br") == 0) {
         return stream_kick_br_command(argc, argv);
+    }
+    if (argc == 4 && strcmp(argv[1], "dump-ts") == 0) {
+        return dump_ts_command(argv[2], argv[3]);
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
         return watch_br_command(argc, argv);

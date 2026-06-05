@@ -45,6 +45,8 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 
 `capture-isdbt` sintoniza e grava payloads `MSG_SMS_DVBT_BDA_DATA` em MPEG-TS bruto.
 
+No firmware oficial ISDB-Tb deste receptor, o fluxo TS tambem pode chegar como `MSG_SMS_DAB_CHANNEL` (`607`) com payload alinhado em pacotes de 188 bytes. `watch-br` e `dump-ts` tratam esse tipo como TS.
+
 `scan-br` cobre a canalizacao brasileira padrao 1-59. `scan-br-extended` cobre 1-69 para investigacao historica ou diagnostica.
 
 `diag-br` testa offsets finos e modos `1seg`, `13seg` e `3seg`, gravando CSV para comparar combinacoes.
@@ -58,6 +60,8 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 `stream-kick-br` testa comandos experimentais de ativacao de dados (`enable-ts`, `data-pump`, `raw-capture`, `raw-abort`). Tambem aceita kicks genericos `data:req:res:value` e `header:req:res` para testar mensagens Siano sem recompilar. `watch-br` aceita `SIANO_TV_STREAM_KICK_BEFORE_TUNE=<lista>`, `SIANO_TV_STREAM_KICK_BEFORE_PID=<lista>` e `SIANO_TV_STREAM_KICK=<lista>` para executar os mesmos kicks antes do tune, antes dos filtros PID ou antes de aguardar TS. `SIANO_TV_CTRL_SRC` e `SIANO_TV_CTRL_DST` permitem variar a rota dos comandos de controle.
 
 `usb-reset` aciona reset USB via libusb. Em alguns hubs o MDTV Receiver sai do barramento e precisa ser reinserido fisicamente para reenumerar.
+
+`dump-ts <seconds> <out.ts>` nao envia comandos de controle; ele apenas despeja payloads TS ja presentes no bulk IN. E util quando o firmware ja iniciou streaming e comandos OUT passam a dar timeout.
 
 `SIANO_TV_FIRMWARE=/caminho/firmware.inp` força um firmware ISDB-T especifico. A leitura USB normaliza mensagens splitadas conforme a estrategia do driver Linux `smsusb`.
 

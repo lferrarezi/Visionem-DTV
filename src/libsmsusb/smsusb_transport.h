@@ -92,6 +92,7 @@ typedef struct sms_isdbt_stats_summary {
 #define SMS_MSG_ISDBT_TUNE_REQ 776
 #define SMS_MSG_ISDBT_TUNE_RES 777
 #define SMS_MSG_DVBT_BDA_DATA 693
+#define SMS_MSG_DAB_CHANNEL 607
 #define SMS_MSG_DATA_MSG 699
 #define SMS_MSG_RAW_CAPTURE_START_REQ 720
 #define SMS_MSG_RAW_CAPTURE_START_RES 721

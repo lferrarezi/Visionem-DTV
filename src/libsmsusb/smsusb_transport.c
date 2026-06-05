@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SMSUSB_LARGE_MESSAGE_SIZE 32768
+#define SMSUSB_LARGE_MESSAGE_SIZE 65536
 
 static void set_error(char *error, unsigned long error_len, const char *message) {
     if (!error || error_len == 0) {
@@ -215,7 +215,7 @@ static int normalize_received_message(unsigned char *message, int transferred, s
         snprintf(error, error_len, "invalid message length %u", header->msg_length);
         return -1;
     }
-    if (header->msg_length > (uint16_t)buffer_len) {
+    if ((size_t)header->msg_length > buffer_len) {
         snprintf(error, error_len, "message length %u exceeds buffer %lu", header->msg_length, (unsigned long)buffer_len);
         return -1;
     }
@@ -245,7 +245,7 @@ static int smsusb_send_and_wait(smsusb_device_t *device, const void *request, in
         return -1;
     }
 
-    unsigned char local_buffer[SMSUSB_ENDPOINT_MAX_PACKET];
+    unsigned char local_buffer[SMSUSB_LARGE_MESSAGE_SIZE];
     void *buffer = response ? response : local_buffer;
     int buffer_len = response ? response_len : (int)sizeof(local_buffer);
 
@@ -780,7 +780,7 @@ int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t
     }
 
     sms_msg_hdr_t *header = (sms_msg_hdr_t *)message;
-    if (header->msg_type != SMS_MSG_DVBT_BDA_DATA) {
+    if (header->msg_type != SMS_MSG_DVBT_BDA_DATA && header->msg_type != SMS_MSG_DAB_CHANNEL) {
         return 0;
     }
 
@@ -790,6 +790,10 @@ int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t
     }
 
     size_t payload_len = header->msg_length - sizeof(sms_msg_hdr_t);
+    if (payload_len == 0 || (payload_len % 188) != 0) {
+        snprintf(error, error_len, "TS payload length %lu is not 188-byte aligned", (unsigned long)payload_len);
+        return -1;
+    }
     if (payload_len > buffer_len) {
         snprintf(error, error_len, "TS payload %lu exceeds buffer %lu", (unsigned long)payload_len, (unsigned long)buffer_len);
         return -1;
