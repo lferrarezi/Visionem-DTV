@@ -55,7 +55,7 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 
 `pid-list-br` instala os filtros PID usados pelo `watch-br` e consulta `MSG_SMS_GET_PID_FILTER_LIST_REQ` para verificar se o firmware registrou os filtros.
 
-`stream-kick-br` testa comandos experimentais de ativacao de dados (`enable-ts`, `data-pump`, `raw-capture`, `raw-abort`). Tambem aceita kicks genericos `data:req:res:value` e `header:req:res` para testar mensagens Siano sem recompilar. `watch-br` aceita `SIANO_TV_STREAM_KICK=<lista>` para executar os mesmos kicks antes de aguardar TS. `SIANO_TV_CTRL_SRC` e `SIANO_TV_CTRL_DST` permitem variar a rota dos comandos de controle.
+`stream-kick-br` testa comandos experimentais de ativacao de dados (`enable-ts`, `data-pump`, `raw-capture`, `raw-abort`). Tambem aceita kicks genericos `data:req:res:value` e `header:req:res` para testar mensagens Siano sem recompilar. `watch-br` aceita `SIANO_TV_STREAM_KICK_BEFORE_TUNE=<lista>`, `SIANO_TV_STREAM_KICK_BEFORE_PID=<lista>` e `SIANO_TV_STREAM_KICK=<lista>` para executar os mesmos kicks antes do tune, antes dos filtros PID ou antes de aguardar TS. `SIANO_TV_CTRL_SRC` e `SIANO_TV_CTRL_DST` permitem variar a rota dos comandos de controle.
 
 `SIANO_TV_FIRMWARE=/caminho/firmware.inp` força um firmware ISDB-T especifico. A leitura USB normaliza mensagens splitadas conforme a estrategia do driver Linux `smsusb`.
 

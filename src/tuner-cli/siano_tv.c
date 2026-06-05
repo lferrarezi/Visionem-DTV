@@ -1634,6 +1634,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
     rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc == 0) {
         prepare_reception_experimental_if_enabled(&device);
+        run_stream_kicks(&device, getenv("SIANO_TV_STREAM_KICK_BEFORE_TUNE"));
         if (env_flag_enabled("SIANO_TV_PID_BEFORE_TUNE")) {
             printf("  instalando filtros PID antes do tune\n");
             rc = install_watch_pids(&device, error, sizeof(error));
@@ -1670,6 +1671,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         usleep(250000);
     }
 
+    run_stream_kicks(&device, getenv("SIANO_TV_STREAM_KICK_BEFORE_PID"));
     if (!env_flag_enabled("SIANO_TV_PID_BEFORE_TUNE")) {
         rc = install_watch_pids(&device, error, sizeof(error));
         if (rc != 0) {

@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.6.6`.
+Versao local: `1.6.7`.
 
 ## Estado Atual
 
@@ -76,7 +76,7 @@ Para comparar firmwares sem editar arquivos, use `SIANO_TV_FIRMWARE=/caminho/arq
 
 Para investigar a entrega de MPEG-TS, `pid-list-br <canal>` instala os filtros padrao e consulta a lista interna reportada pelo firmware. `SIANO_TV_PID_BEFORE_TUNE=1` instala os filtros antes da sintonia para testar a ordem alternativa do pipeline.
 
-`stream-kick-br <canal> [kicks]` testa comandos experimentais de ativacao do caminho de dados. Os kicks conhecidos sao `enable-ts`, `data-pump`, `raw-capture`, `raw-abort` e podem ser combinados por virgula. No `watch-br`, o mesmo caminho pode ser acionado com `SIANO_TV_STREAM_KICK=enable-ts`.
+`stream-kick-br <canal> [kicks]` testa comandos experimentais de ativacao do caminho de dados. Os kicks conhecidos sao `enable-ts`, `data-pump`, `raw-capture`, `raw-abort` e podem ser combinados por virgula. No `watch-br`, o mesmo caminho pode ser acionado com `SIANO_TV_STREAM_KICK_BEFORE_TUNE`, `SIANO_TV_STREAM_KICK_BEFORE_PID` ou `SIANO_TV_STREAM_KICK`.
 
 ## Canalizacao Brasileira
 
@@ -123,7 +123,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.6.6-macos-installer.pkg
+dist/siano-tv-1.6.7-macos-installer.pkg
 ```
 
 O instalador coloca:
