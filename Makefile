@@ -9,9 +9,9 @@ LIBUSB_CFLAGS := -I$(LIBUSB_PREFIX)/include/libusb-1.0
 LIBUSB_LDFLAGS := -L$(LIBUSB_PREFIX)/lib -lusb-1.0
 LIBUSB_STATIC := $(LIBUSB_PREFIX)/lib/libusb-1.0.a
 
-.PHONY: all probe iokit-probe libusb-probe cli install uninstall clean
+.PHONY: all probe iokit-probe libusb-probe cli app install uninstall clean
 
-all: probe cli
+all: probe cli app
 
 probe: iokit-probe libusb-probe
 
@@ -20,6 +20,8 @@ iokit-probe: $(BUILD_DIR)/siano-probe
 libusb-probe: $(BUILD_DIR)/siano-libusb-probe
 
 cli: $(BUILD_DIR)/siano-tv
+
+app: $(BUILD_DIR)/SianoTVPlayer
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -32,6 +34,10 @@ $(BUILD_DIR)/siano-libusb-probe: src/probe/siano_libusb_probe.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/siano-tv: src/tuner-cli/siano_tv.c src/libsmsusb/smsusb_transport.c src/libsmsusb/smsusb_transport.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(LIBUSB_CFLAGS) -Isrc/libsmsusb src/tuner-cli/siano_tv.c src/libsmsusb/smsusb_transport.c -o $@ $(LIBUSB_STATIC) -framework IOKit -framework CoreFoundation -framework Security
+
+$(BUILD_DIR)/SianoTVPlayer: apps/SianoTVPlayer/Package.swift apps/SianoTVPlayer/Sources/main.swift | $(BUILD_DIR)
+	cd apps/SianoTVPlayer && swift build -c release
+	cp apps/SianoTVPlayer/.build/release/SianoTVPlayer $@
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -1,5 +1,6 @@
 .DS_Store
 build/
+apps/**/.build/
 captures/
 *.ts
 *.m2ts

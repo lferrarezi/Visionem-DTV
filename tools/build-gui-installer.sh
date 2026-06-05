@@ -73,16 +73,11 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 PLIST
 cat > "$APP_DIR/Contents/MacOS/siano-tv-launcher" <<'SCRIPT'
 #!/bin/sh
-mkdir -p "$HOME/Movies/SianoTV"
-/usr/bin/osascript <<'APPLESCRIPT'
-set cmd to "clear; echo 'Siano TV Digital - ISDB-Tb Brasil'; echo; echo '1) Procurando canais brasileiros 1-59...'; /usr/local/bin/siano-tv scan-br; echo; echo 'Para diagnostico amplo, rode:'; echo '  /usr/local/bin/siano-tv scan-br-extended'; echo; echo 'Se ficar rf=1 demod=0, rode:'; echo '  /usr/local/bin/siano-tv diag-br CANAL 2 ~/Movies/SianoTV/diag-canal.csv'; echo; echo 'Para assistir/capturar, use:'; echo '  /usr/local/bin/siano-tv watch-br CANAL 300 ~/Movies/SianoTV/canal.ts'; echo; echo 'Exemplo:'; echo '  /usr/local/bin/siano-tv watch-br 23 300 ~/Movies/SianoTV/canal-23.ts'; echo; echo 'O dispositivo usa antena interna. Ajuste a posicao do dongle perto de janela/area aberta.'; echo; echo 'Pressione ENTER para fechar...'; read resposta"
-tell application "Terminal"
-	activate
-	do script cmd
-end tell
-APPLESCRIPT
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exec "$DIR/SianoTVPlayer"
 SCRIPT
 chmod 0755 "$APP_DIR/Contents/MacOS/siano-tv-launcher"
+install -m 0755 "$ROOT_DIR/build/SianoTVPlayer" "$APP_DIR/Contents/MacOS/SianoTVPlayer"
 codesign --force --deep --sign - "$PKGROOT/Applications/$APP_NAME.app" >/dev/null
 dot_clean -m "$PKGROOT" >/dev/null 2>&1 || true
 xattr -cr "$PKGROOT" >/dev/null 2>&1 || true
