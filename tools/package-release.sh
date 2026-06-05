@@ -11,7 +11,11 @@ cd "$ROOT_DIR"
 make clean
 make all
 
-rm -rf "$PKG_DIR"
+mkdir -p "$DIST_DIR"
+find "$DIST_DIR" -maxdepth 1 \( \
+    -type d -name 'siano-tv-*' -o \
+    -type f -name 'siano-tv-*-macos-arm64.tar.gz' \
+\) -exec rm -rf {} +
 mkdir -p "$PKG_DIR/bin" "$PKG_DIR/firmware" "$PKG_DIR/docs" "$PKG_DIR/tools"
 
 cp build/siano-tv "$PKG_DIR/bin/"
@@ -26,4 +30,5 @@ elif [ -f firmware/isdbt_nova_12mhz_b0.inp ]; then
 fi
 
 tar -C "$DIST_DIR" -czf "$DIST_DIR/siano-tv-$VERSION-macos-arm64.tar.gz" "siano-tv-$VERSION"
+rm -rf "$PKG_DIR"
 shasum -a 256 "$DIST_DIR/siano-tv-$VERSION-macos-arm64.tar.gz"

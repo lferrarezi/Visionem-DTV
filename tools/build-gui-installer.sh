@@ -9,6 +9,7 @@ APP_NAME="Siano TV Digital"
 APP_SUPPORT="$PKGROOT/Library/Application Support/Siano TV Digital"
 COMPONENT_PKG="$DIST_DIR/siano-tv-$VERSION-component.pkg"
 FINAL_PKG="$DIST_DIR/siano-tv-$VERSION-macos-installer.pkg"
+KEEP_COMPONENT_PKG="${KEEP_COMPONENT_PKG:-0}"
 
 cd "$ROOT_DIR"
 
@@ -28,7 +29,13 @@ fi
 make clean
 make all
 
-rm -rf "$PKGROOT" "$COMPONENT_PKG" "$FINAL_PKG"
+mkdir -p "$DIST_DIR"
+rm -rf "$PKGROOT"
+find "$DIST_DIR" -maxdepth 1 -type f \( \
+    -name 'siano-tv-*-component.pkg' -o \
+    -name 'siano-tv-*-macos-installer.pkg' -o \
+    -name 'siano-tv-launcher.applescript' \
+\) -delete
 mkdir -p "$PKGROOT/usr/local/bin"
 mkdir -p "$APP_SUPPORT/firmware"
 mkdir -p "$PKGROOT/Applications"
@@ -64,6 +71,11 @@ productbuild \
     --identifier "com.local.sianotv.br.product" \
     --version "$VERSION" \
     "$FINAL_PKG"
+
+if [ "$KEEP_COMPONENT_PKG" != "1" ]; then
+    rm -f "$COMPONENT_PKG"
+fi
+rm -f "$APPLESCRIPT"
 
 shasum -a 256 "$FINAL_PKG"
 echo "$FINAL_PKG"
