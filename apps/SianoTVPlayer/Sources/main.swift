@@ -2,12 +2,21 @@ import AppKit
 import AVKit
 import Foundation
 
-struct TVChannel: Hashable {
+struct TVChannel: Hashable, Sendable {
     let number: Int
     let band: String
     let frequency: Int
+    var rfLocked: Bool?
+    var demodLocked: Bool?
+    var scanStatus: String?
     var title: String { "Canal \(number)" }
-    var subtitle: String { "\(band) - \(frequency) Hz" }
+    var subtitle: String {
+        let base = "\(band) - \(frequency) Hz"
+        guard let rfLocked, let demodLocked else { return base }
+        if demodLocked { return "\(base) - pronto para imagem" }
+        if rfLocked { return "\(base) - portadora sem demod" }
+        return "\(base) - sem lock"
+    }
 }
 
 @MainActor
@@ -20,6 +29,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private let scanButton = NSButton(title: "Atualizar", target: nil, action: nil)
     private let stopButton = NSButton(title: "Parar", target: nil, action: nil)
     private var channels: [TVChannel] = []
+    private var scanProcess: Process?
     private var watchProcess: Process?
     private var currentOutputURL: URL?
     private var playbackTimer: Timer?
@@ -78,6 +88,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         tableView.dataSource = self
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("channel"))
         column.resizingMask = .autoresizingMask
+        column.width = 320
+        column.minWidth = 260
         tableView.addTableColumn(column)
         scrollView.documentView = tableView
 
@@ -151,19 +163,81 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     @objc private func refreshChannels() {
         stopWatching()
-        loadChannels()
-        statusLabel.stringValue = "Lista atualizada"
+        startScan()
     }
 
     @objc private func stopWatching() {
         playbackTimer?.invalidate()
         playbackTimer = nil
+        scanProcess?.terminate()
+        scanProcess = nil
         watchProcess?.terminate()
         watchProcess = nil
         playerView.player?.pause()
         playerView.player = nil
         statusLabel.stringValue = "Parado"
         detailLabel.stringValue = "Selecione um canal para assistir"
+    }
+
+    private func startScan() {
+        guard let binary = findSianoTVBinary() else {
+            statusLabel.stringValue = "siano-tv nao encontrado"
+            detailLabel.stringValue = "Instale o pacote antes de atualizar"
+            return
+        }
+
+        channels = channels.map {
+            TVChannel(number: $0.number, band: $0.band, frequency: $0.frequency, rfLocked: nil, demodLocked: nil, scanStatus: "aguardando")
+        }
+        tableView.reloadData()
+        scanButton.isEnabled = false
+        statusLabel.stringValue = "Atualizando canais..."
+        detailLabel.stringValue = "Executando scan-br; isso pode levar cerca de 1 minuto"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: binary)
+            process.arguments = ["scan-br"]
+            process.standardOutput = output
+            process.standardError = output
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                let text = String(data: data, encoding: .utf8) ?? ""
+                let scanned = text.split(separator: "\n").compactMap { parseScanLine(String($0)) }
+                DispatchQueue.main.async {
+                    for channel in scanned {
+                        self.applyScanResult(channel)
+                    }
+                    self.scanButton.isEnabled = true
+                    self.statusLabel.stringValue = "Atualizacao concluida"
+                    let ready = self.channels.filter { $0.demodLocked == true }.count
+                    let carriers = self.channels.filter { $0.rfLocked == true }.count
+                    self.detailLabel.stringValue = "\(ready) canais com demod, \(carriers) com portadora"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.scanButton.isEnabled = true
+                    self.statusLabel.stringValue = "Falha ao atualizar"
+                    self.detailLabel.stringValue = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func applyScanResult(_ scanned: TVChannel) {
+        if let index = channels.firstIndex(where: { $0.number == scanned.number }) {
+            channels[index] = scanned
+        } else {
+            channels.append(scanned)
+            channels.sort { $0.number < $1.number }
+        }
+        tableView.reloadData()
+        statusLabel.stringValue = "Canal \(scanned.number): \(scanned.scanStatus ?? "testado")"
+        detailLabel.stringValue = scanned.subtitle
     }
 
     private func startWatching(_ channel: TVChannel) {
@@ -231,6 +305,13 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let channel = channels[row]
         let title = NSTextField(labelWithString: channel.title)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
+        if channel.demodLocked == true {
+            title.textColor = .systemGreen
+        } else if channel.rfLocked == true {
+            title.textColor = .systemOrange
+        } else if channel.rfLocked == false {
+            title.textColor = .secondaryLabelColor
+        }
         let subtitle = NSTextField(labelWithString: channel.subtitle)
         subtitle.font = .systemFont(ofSize: 12)
         subtitle.textColor = .secondaryLabelColor
@@ -296,12 +377,12 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             }
         }
         guard let number, let frequency else { return nil }
-        return TVChannel(number: number, band: bandParts.joined(separator: " "), frequency: frequency)
+        return TVChannel(number: number, band: bandParts.joined(separator: " "), frequency: frequency, rfLocked: nil, demodLocked: nil, scanStatus: nil)
     }
 
     private func defaultChannels() -> [TVChannel] {
         (1...59).map { channel in
-            TVChannel(number: channel, band: "Brasil", frequency: 0)
+            TVChannel(number: channel, band: "Brasil", frequency: 0, rfLocked: nil, demodLocked: nil, scanStatus: nil)
         }
     }
 
@@ -331,6 +412,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
+}
+
+func parseScanLine(_ text: String) -> TVChannel? {
+    guard text.contains("canal="), text.contains("freq="), text.contains("rf="), text.contains("demod=") else { return nil }
+    let parts = text.split(separator: " ")
+    var number: Int?
+    var bandParts: [String] = []
+    var frequency: Int?
+    var rf: Bool?
+    var demod: Bool?
+    var status: String?
+    var readingBand = false
+    for rawPart in parts {
+        let part = String(rawPart)
+        if part.hasPrefix("canal=") {
+            number = Int(part.dropFirst("canal=".count))
+            readingBand = false
+        } else if part.hasPrefix("faixa=") {
+            bandParts = [String(part.dropFirst("faixa=".count))]
+            readingBand = true
+        } else if part.hasPrefix("freq=") {
+            frequency = Int(part.dropFirst("freq=".count))
+            readingBand = false
+        } else if part.hasPrefix("rf=") {
+            rf = part.hasSuffix("1")
+            readingBand = false
+        } else if part.hasPrefix("demod=") {
+            demod = part.hasSuffix("1")
+            readingBand = false
+        } else if part.hasPrefix("status=") {
+            status = String(part.dropFirst("status=".count))
+            readingBand = false
+        } else if readingBand {
+            bandParts.append(part)
+        }
+    }
+    guard let number, let frequency else { return nil }
+    return TVChannel(number: number, band: bandParts.joined(separator: " "), frequency: frequency, rfLocked: rf, demodLocked: demod, scanStatus: status)
 }
 
 let app = NSApplication.shared

@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.5.0`.
+Versao local: `1.5.1`.
 
 ## Estado Atual
 
