@@ -560,6 +560,67 @@ int smsusb_read_message_header(smsusb_device_t *device, sms_msg_hdr_t *header_ou
     return transferred;
 }
 
+int smsusb_read_raw_message(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len) {
+    if (!device || !device->handle || !buffer || !size_out || buffer_len < sizeof(sms_msg_hdr_t)) {
+        set_error(error, error_len, "invalid read_raw_message arguments");
+        return -1;
+    }
+
+    *size_out = 0;
+    int transferred = 0;
+    libusb_device_handle *handle = (libusb_device_handle *)device->handle;
+    int rc = libusb_bulk_transfer(
+        handle,
+        device->info.endpoint_in,
+        buffer,
+        (int)buffer_len,
+        &transferred,
+        timeout_ms
+    );
+    if (rc == LIBUSB_ERROR_TIMEOUT) {
+        set_error(error, error_len, "");
+        return 0;
+    }
+    if (rc < 0) {
+        set_libusb_error(error, error_len, "bulk IN failed", rc);
+        return -1;
+    }
+    if (transferred < (int)sizeof(sms_msg_hdr_t)) {
+        snprintf(error, error_len, "bulk IN short message: %d bytes", transferred);
+        return -1;
+    }
+
+    sms_msg_hdr_t *header = (sms_msg_hdr_t *)buffer;
+    if (header->msg_length > transferred) {
+        snprintf(error, error_len, "message length %u exceeds transfer %d", header->msg_length, transferred);
+        return -1;
+    }
+
+    *size_out = (size_t)transferred;
+    set_error(error, error_len, "");
+    return 0;
+}
+
+static void parse_isdbt_stats_payload(const uint32_t *data, sms_isdbt_stats_summary_t *stats) {
+    memset(stats, 0, sizeof(*stats));
+    stats->statistics_type = data[0];
+    stats->full_size = data[1];
+    stats->is_rf_locked = data[2];
+    stats->is_demod_locked = data[3];
+    stats->snr = (int32_t)data[5];
+    stats->rssi = (int32_t)data[6];
+    stats->in_band_power = (int32_t)data[7];
+    stats->carrier_offset = (int32_t)data[8];
+    stats->frequency = data[9];
+    stats->bandwidth = data[10];
+    stats->transmission_mode = data[11];
+    stats->modem_state = data[12];
+    stats->guard_interval = data[13];
+    stats->system_type = data[14];
+    stats->partial_reception = data[15];
+    stats->num_layers = data[16];
+}
+
 int smsusb_get_isdbt_stats(smsusb_device_t *device, sms_isdbt_stats_summary_t *stats, char *error, unsigned long error_len) {
     if (!device || !device->handle || !stats) {
         set_error(error, error_len, "invalid stats arguments");
@@ -599,23 +660,52 @@ int smsusb_get_isdbt_stats(smsusb_device_t *device, sms_isdbt_stats_summary_t *s
     }
 
     uint32_t *data = (uint32_t *)(response + offset);
-    memset(stats, 0, sizeof(*stats));
-    stats->statistics_type = data[0];
-    stats->full_size = data[1];
-    stats->is_rf_locked = data[2];
-    stats->is_demod_locked = data[3];
-    stats->snr = (int32_t)data[5];
-    stats->rssi = (int32_t)data[6];
-    stats->in_band_power = (int32_t)data[7];
-    stats->carrier_offset = (int32_t)data[8];
-    stats->frequency = data[9];
-    stats->bandwidth = data[10];
-    stats->transmission_mode = data[11];
-    stats->modem_state = data[12];
-    stats->guard_interval = data[13];
-    stats->system_type = data[14];
-    stats->partial_reception = data[15];
-    stats->num_layers = data[16];
+    parse_isdbt_stats_payload(data, stats);
+
+    set_error(error, error_len, "");
+    return 0;
+}
+
+int smsusb_get_isdbt_stats_ex(smsusb_device_t *device, sms_isdbt_stats_summary_t *stats, char *error, unsigned long error_len) {
+    if (!device || !device->handle || !stats) {
+        set_error(error, error_len, "invalid stats_ex arguments");
+        return -1;
+    }
+
+    sms_msg_hdr_t request;
+    sms_msg_init_ex(
+        &request,
+        SMS_MSG_GET_STATISTICS_EX_REQ,
+        SMS_DVBT_BDA_CONTROL_MSG_ID,
+        SMS_HIF_TASK,
+        sizeof(request)
+    );
+
+    unsigned char response[8192];
+    int rc = smsusb_send_and_wait(
+        device,
+        &request,
+        sizeof(request),
+        SMS_MSG_GET_STATISTICS_EX_RES,
+        5000,
+        response,
+        sizeof(response),
+        error,
+        error_len
+    );
+    if (rc < 0) {
+        return -1;
+    }
+
+    sms_msg_hdr_t *header = (sms_msg_hdr_t *)response;
+    size_t offset = sizeof(sms_msg_hdr_t) + sizeof(uint32_t);
+    if (header->msg_length < offset + (17 * sizeof(uint32_t))) {
+        snprintf(error, error_len, "statistics_ex response too short: %u bytes", header->msg_length);
+        return -1;
+    }
+
+    uint32_t *data = (uint32_t *)(response + offset);
+    parse_isdbt_stats_payload(data, stats);
 
     set_error(error, error_len, "");
     return 0;

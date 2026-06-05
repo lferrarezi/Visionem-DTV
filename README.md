@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.5.1`.
+Versao local: `1.6.0`.
 
 ## Estado Atual
 
@@ -57,6 +57,8 @@ Para um teste manual em tempo real enquanto ajusta a antena:
 ./build/siano-tv scan-br
 ./build/siano-tv scan-br-extended
 ./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
+./build/siano-tv debug-channel-br 23 5
+./build/siano-tv stats-isdbt-ex 527142857
 ./build/siano-tv watch-br 23 300 captures/canal-23.ts
 ```
 
@@ -64,7 +66,7 @@ O comando imprime lock/estatisticas a cada segundo, grava MPEG-TS se aparecer, e
 
 O dispositivo informado nao aceita antena externa. Para teste real, mova o dongle inteiro para perto de janela ou area aberta e rode `watch-br` no canal fisico mais promissor do `scan-br`.
 
-Se `scan-br` ficar em `rf=1 demod=0`, rode `diag-br`. Ele testa offsets finos ao redor do centro do canal e variantes `1seg`, `13seg` e `3seg`, grava CSV e imprime a melhor combinacao para um teste `watch-isdbt`.
+Se `scan-br` ficar em `rf=1 demod=0`, rode `diag-br` e depois `debug-channel-br`. O `diag-br` testa offsets finos ao redor do centro do canal e variantes `1seg`, `13seg` e `3seg`, gravando CSV. O `debug-channel-br` sintoniza o canal fisico nos tres modos, registra mensagens brutas vindas do dispositivo, compara `GET_STATISTICS` e `GET_STATISTICS_EX`, e mostra se ha pacotes MPEG-TS.
 
 ## Canalizacao Brasileira
 
@@ -111,7 +113,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.5.0-macos-installer.pkg
+dist/siano-tv-1.6.0-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -128,6 +130,7 @@ Tambem e possivel rodar pelo Terminal:
 /usr/local/bin/siano-tv scan-br
 /usr/local/bin/siano-tv channels-br
 /usr/local/bin/siano-tv scan-br-extended
+/usr/local/bin/siano-tv debug-channel-br 23 5
 /usr/local/bin/siano-tv watch-br 23 300 ~/Movies/SianoTV/canal-23.ts
 ```
 

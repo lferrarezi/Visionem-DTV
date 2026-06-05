@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -468,20 +468,30 @@ static const char *msg_name(uint16_t type) {
         return "MSG_SMS_DVBT_BDA_DATA";
     case SMS_MSG_ISDBT_TUNE_RES:
         return "MSG_SMS_ISDBT_TUNE_RES";
-    case 805:
+    case SMS_MSG_INTERFACE_LOCK_IND:
         return "MSG_SMS_INTERFACE_LOCK_IND";
-    case 806:
+    case SMS_MSG_INTERFACE_UNLOCK_IND:
         return "MSG_SMS_INTERFACE_UNLOCK_IND";
-    case 827:
+    case SMS_MSG_SIGNAL_DETECTED_IND:
         return "MSG_SMS_SIGNAL_DETECTED_IND";
-    case 828:
+    case SMS_MSG_NO_SIGNAL_IND:
         return "MSG_SMS_NO_SIGNAL_IND";
-    case 654:
+    case SMS_MSG_GET_STATISTICS_RES:
+        return "MSG_SMS_GET_STATISTICS_RES";
+    case SMS_MSG_GET_STATISTICS_EX_RES:
         return "MSG_SMS_GET_STATISTICS_EX_RES";
+    case SMS_MSG_TRANSMISSION_IND:
+        return "MSG_SMS_TRANSMISSION_IND";
+    case SMS_MSG_HO_PER_SLICES_IND:
+        return "MSG_SMS_HO_PER_SLICES_IND";
+    case SMS_MSG_SET_PERIODIC_STATISTICS_RES:
+        return "MSG_SMS_SET_PERIODIC_STATISTICS_RES";
     default:
         return "unknown";
     }
 }
+
+static int stats_score(const sms_isdbt_stats_summary_t *stats);
 
 static int debug_read_command(const char *frequency_text, const char *seconds_text) {
     unsigned long frequency = 0;
@@ -607,6 +617,65 @@ static int stats_isdbt_command(const char *frequency_text) {
     return 0;
 }
 
+static void print_stats_line(const char *prefix, const sms_isdbt_stats_summary_t *stats) {
+    printf("%srf=%u demod=%u modem=%u snr=%d rssi=%d power=%d carrier_offset=%d bandwidth=%u transmission=%u guard=%u layers=%u score=%d\n",
+           prefix,
+           stats->is_rf_locked,
+           stats->is_demod_locked,
+           stats->modem_state,
+           stats->snr,
+           stats->rssi,
+           stats->in_band_power,
+           stats->carrier_offset,
+           stats->bandwidth,
+           stats->transmission_mode,
+           stats->guard_interval,
+           stats->num_layers,
+           stats_score(stats));
+}
+
+static int stats_isdbt_ex_command(const char *frequency_text) {
+    unsigned long frequency = 0;
+    if (parse_ulong_arg(frequency_text, 1, 1000000000UL, &frequency) != 0) {
+        fprintf(stderr, "stats-isdbt-ex failed: invalid frequency %s\n", frequency_text);
+        return 2;
+    }
+
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "stats-isdbt-ex failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc == 0) {
+        rc = smsusb_tune_isdbt(&device, (uint32_t)frequency, error, sizeof(error));
+    }
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "stats-isdbt-ex failed: %s\n", error);
+        return 1;
+    }
+
+    sleep(1);
+
+    sms_isdbt_stats_summary_t stats;
+    rc = smsusb_get_isdbt_stats_ex(&device, &stats, error, sizeof(error));
+    smsusb_close(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "stats-isdbt-ex failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv stats-isdbt-ex\n");
+    printf("  requested frequency: %lu Hz\n", frequency);
+    printf("  reported frequency: %u Hz\n", stats.frequency);
+    print_stats_line("  ", &stats);
+    return 0;
+}
+
 static uint32_t uhf_channel_frequency(unsigned int channel) {
     return 473142857U + ((channel - 14U) * 6000000U);
 }
@@ -723,6 +792,140 @@ static int stats_score(const sms_isdbt_stats_summary_t *stats) {
         score += 1000000 - carrier_offset;
     }
     return score;
+}
+
+typedef struct msg_count {
+    uint16_t type;
+    unsigned long count;
+    unsigned long bytes;
+} msg_count_t;
+
+static void add_msg_count(msg_count_t *counts, size_t count_len, uint16_t type, unsigned int length) {
+    for (size_t i = 0; i < count_len; i++) {
+        if (counts[i].type == type || counts[i].count == 0) {
+            counts[i].type = type;
+            counts[i].count++;
+            counts[i].bytes += length;
+            return;
+        }
+    }
+}
+
+static int debug_channel_br_command(int argc, char **argv) {
+    unsigned long channel = 0;
+    if (parse_ulong_arg(argv[2], BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
+        fprintf(stderr, "debug-channel-br failed: canal fisico deve estar entre 1 e 69\n");
+        return 2;
+    }
+
+    unsigned long seconds_per_mode = 5;
+    if (argc >= 4 && parse_ulong_arg(argv[3], 1, 30, &seconds_per_mode) != 0) {
+        fprintf(stderr, "debug-channel-br failed: seconds_per_mode deve estar entre 1 e 30\n");
+        return 2;
+    }
+
+    uint32_t frequency = br_channel_frequency((unsigned int)channel);
+    if (!frequency) {
+        fprintf(stderr, "debug-channel-br failed: canal fisico fora da canalizacao conhecida\n");
+        return 2;
+    }
+
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "debug-channel-br failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "debug-channel-br failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv debug-channel-br\n");
+    printf("  sistema: ISDB-Tb Brasil\n");
+    printf("  canal: %lu\n", channel);
+    printf("  faixa: %s\n", br_channel_band((unsigned int)channel));
+    printf("  frequency: %u Hz\n", frequency);
+    printf("  seconds_per_mode: %lu\n", seconds_per_mode);
+
+    const uint32_t modes[] = {SMS_BW_ISDBT_1SEG, SMS_BW_ISDBT_13SEG, SMS_BW_ISDBT_3SEG};
+    unsigned char message[8192];
+    for (size_t mode_i = 0; mode_i < sizeof(modes) / sizeof(modes[0]); mode_i++) {
+        uint32_t mode = modes[mode_i];
+        printf("  mode=%s tune=...\n", segment_name(mode));
+        rc = smsusb_tune_isdbt_segment(&device, frequency, mode, error, sizeof(error));
+        if (rc != 0) {
+            printf("    tune_error=%s\n", error);
+            continue;
+        }
+
+        msg_count_t counts[32];
+        memset(counts, 0, sizeof(counts));
+        unsigned long transfers = 0;
+        unsigned long timeouts = 0;
+        unsigned long ts_bytes = 0;
+        time_t end_time = time(NULL) + (time_t)seconds_per_mode;
+        while (time(NULL) < end_time) {
+            size_t size = 0;
+            rc = smsusb_read_raw_message(&device, message, sizeof(message), &size, 500, error, sizeof(error));
+            if (rc != 0) {
+                printf("    read_error=%s\n", error);
+                break;
+            }
+            if (size == 0) {
+                timeouts++;
+                continue;
+            }
+            sms_msg_hdr_t *header = (sms_msg_hdr_t *)message;
+            transfers++;
+            add_msg_count(counts, sizeof(counts) / sizeof(counts[0]), header->msg_type, header->msg_length);
+            if (header->msg_type == SMS_MSG_DVBT_BDA_DATA && header->msg_length >= sizeof(sms_msg_hdr_t)) {
+                ts_bytes += header->msg_length - sizeof(sms_msg_hdr_t);
+            }
+            printf("    msg type=%u %s length=%u src=%u dst=%u flags=0x%04x transfer=%lu\n",
+                   header->msg_type,
+                   msg_name(header->msg_type),
+                   header->msg_length,
+                   header->msg_src_id,
+                   header->msg_dst_id,
+                   header->msg_flags,
+                   (unsigned long)size);
+        }
+
+        sms_isdbt_stats_summary_t stats;
+        rc = smsusb_get_isdbt_stats(&device, &stats, error, sizeof(error));
+        if (rc == 0) {
+            print_stats_line("    stats: ", &stats);
+        } else {
+            printf("    stats_error=%s\n", error);
+        }
+        rc = smsusb_get_isdbt_stats_ex(&device, &stats, error, sizeof(error));
+        if (rc == 0) {
+            print_stats_line("    stats_ex: ", &stats);
+        } else {
+            printf("    stats_ex_error=%s\n", error);
+        }
+
+        printf("    summary transfers=%lu timeouts=%lu ts_bytes=%lu\n", transfers, timeouts, ts_bytes);
+        for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); i++) {
+            if (counts[i].count == 0) {
+                continue;
+            }
+            printf("    count type=%u %s messages=%lu bytes=%lu\n",
+                   counts[i].type,
+                   msg_name(counts[i].type),
+                   counts[i].count,
+                   counts[i].bytes);
+        }
+        fflush(stdout);
+    }
+
+    smsusb_close(&device, error, sizeof(error));
+    return 0;
 }
 
 static void diag_write_error_row(
@@ -1121,6 +1324,65 @@ static int maybe_launch_ffplay(const char *out_path) {
     return system(command);
 }
 
+static int choose_watch_mode(smsusb_device_t *device, uint32_t frequency, uint32_t *mode_out, char *error, unsigned long error_len) {
+    const uint32_t modes[] = {SMS_BW_ISDBT_1SEG, SMS_BW_ISDBT_13SEG, SMS_BW_ISDBT_3SEG};
+    int best_score = -2147483647;
+    uint32_t best_mode = SMS_BW_ISDBT_13SEG;
+    char last_error[256] = "";
+
+    printf("  autotune: testando 1seg, 13seg e 3seg\n");
+    for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
+        uint32_t mode = modes[i];
+        int rc = smsusb_tune_isdbt_segment(device, frequency, mode, error, error_len);
+        if (rc != 0) {
+            snprintf(last_error, sizeof(last_error), "%s", error);
+            printf("  autotune mode=%s tune_error=%s\n", segment_name(mode), error);
+            continue;
+        }
+
+        sleep(1);
+        sms_isdbt_stats_summary_t stats;
+        rc = smsusb_get_isdbt_stats_ex(device, &stats, error, error_len);
+        if (rc != 0) {
+            rc = smsusb_get_isdbt_stats(device, &stats, error, error_len);
+            if (rc != 0) {
+                snprintf(last_error, sizeof(last_error), "%s", error);
+                printf("  autotune mode=%s stats_error=%s\n", segment_name(mode), error);
+                continue;
+            }
+        }
+
+        int score = stats_score(&stats);
+        printf("  autotune mode=%s rf=%u demod=%u modem=%u snr=%d rssi=%d power=%d score=%d\n",
+               segment_name(mode),
+               stats.is_rf_locked,
+               stats.is_demod_locked,
+               stats.modem_state,
+               stats.snr,
+               stats.rssi,
+               stats.in_band_power,
+               score);
+
+        if (stats.is_demod_locked) {
+            *mode_out = mode;
+            return smsusb_tune_isdbt_segment(device, frequency, mode, error, error_len);
+        }
+        if (score > best_score) {
+            best_score = score;
+            best_mode = mode;
+        }
+    }
+
+    if (best_score == -2147483647) {
+        snprintf(error, error_len, "autotune failed: %s", last_error[0] ? last_error : "nenhum modo sintonizou");
+        return -1;
+    }
+
+    *mode_out = best_mode;
+    printf("  autotune escolhido=%s score=%d sem demod lock; tentando capturar mesmo assim\n", segment_name(best_mode), best_score);
+    return smsusb_tune_isdbt_segment(device, frequency, best_mode, error, error_len);
+}
+
 static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds, const char *out_path) {
     FILE *out = fopen(out_path, "wb");
     if (!out) {
@@ -1137,9 +1399,10 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         return 1;
     }
 
+    uint32_t selected_mode = SMS_BW_ISDBT_13SEG;
     rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc == 0) {
-        rc = smsusb_tune_isdbt_segment(&device, (uint32_t)frequency, SMS_BW_ISDBT_13SEG, error, sizeof(error));
+        rc = choose_watch_mode(&device, (uint32_t)frequency, &selected_mode, error, sizeof(error));
     }
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
@@ -1148,7 +1411,28 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         return 1;
     }
 
-    const uint32_t pids[] = {0x0000, 0x0010, 0x0011, 0x0012};
+    printf("  aguardando demod lock antes dos filtros PID...\n");
+    time_t lock_deadline = time(NULL) + 6;
+    while (time(NULL) < lock_deadline) {
+        sms_isdbt_stats_summary_t stats;
+        int stats_rc = smsusb_get_isdbt_stats_ex(&device, &stats, error, sizeof(error));
+        if (stats_rc != 0) {
+            stats_rc = smsusb_get_isdbt_stats(&device, &stats, error, sizeof(error));
+        }
+        if (stats_rc == 0 && stats.is_demod_locked) {
+            printf("  demod lock: rf=%u demod=%u snr=%d rssi=%d power=%d layers=%u\n",
+                   stats.is_rf_locked,
+                   stats.is_demod_locked,
+                   stats.snr,
+                   stats.rssi,
+                   stats.in_band_power,
+                   stats.num_layers);
+            break;
+        }
+        usleep(250000);
+    }
+
+    const uint32_t pids[] = {0x2000, 0x0000, 0x0010, 0x0011, 0x0012, 0x0014, 0x1fff};
     for (size_t i = 0; i < sizeof(pids) / sizeof(pids[0]); i++) {
         rc = smsusb_add_pid_filter(&device, pids[i], error, sizeof(error));
         if (rc != 0) {
@@ -1160,7 +1444,8 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
     }
 
     printf("siano-tv watch-isdbt\n");
-    printf("  sistema: ISDB-Tb Brasil full-seg\n");
+    printf("  sistema: ISDB-Tb Brasil\n");
+    printf("  mode: %s\n", segment_name(selected_mode));
     printf("  frequency: %lu Hz\n", frequency);
     printf("  duration: %lu seconds\n", seconds);
     printf("  output: %s\n", out_path);
@@ -1197,7 +1482,10 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         time_t now = time(NULL);
         if (now >= next_stats) {
             sms_isdbt_stats_summary_t stats;
-            int stats_rc = smsusb_get_isdbt_stats(&device, &stats, error, sizeof(error));
+            int stats_rc = smsusb_get_isdbt_stats_ex(&device, &stats, error, sizeof(error));
+            if (stats_rc != 0) {
+                stats_rc = smsusb_get_isdbt_stats(&device, &stats, error, sizeof(error));
+            }
             if (stats_rc == 0) {
                 printf("  t=%lds rf=%u demod=%u modem=%u snr=%d rssi=%d power=%d layers=%u bytes=%lu status=%s\n",
                        (long)(now - start),
@@ -1304,6 +1592,9 @@ int main(int argc, char **argv) {
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "diag-br") == 0) {
         return diag_br_command(argc, argv);
     }
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "debug-channel-br") == 0) {
+        return debug_channel_br_command(argc, argv);
+    }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
         return watch_br_command(argc, argv);
     }
@@ -1315,6 +1606,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 3 && strcmp(argv[1], "stats-isdbt") == 0) {
         return stats_isdbt_command(argv[2]);
+    }
+    if (argc == 3 && strcmp(argv[1], "stats-isdbt-ex") == 0) {
+        return stats_isdbt_ex_command(argv[2]);
     }
     if (argc == 5 && strcmp(argv[1], "capture-isdbt") == 0) {
         return capture_isdbt_command(argv[2], argv[3], argv[4]);

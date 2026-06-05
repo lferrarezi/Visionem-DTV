@@ -91,6 +91,16 @@ typedef struct sms_isdbt_stats_summary {
 #define SMS_MSG_ADD_PID_FILTER_RES 602
 #define SMS_MSG_GET_STATISTICS_REQ 615
 #define SMS_MSG_GET_STATISTICS_RES 616
+#define SMS_MSG_HO_PER_SLICES_IND 630
+#define SMS_MSG_GET_STATISTICS_EX_REQ 653
+#define SMS_MSG_GET_STATISTICS_EX_RES 654
+#define SMS_MSG_TRANSMISSION_IND 782
+#define SMS_MSG_INTERFACE_LOCK_IND 805
+#define SMS_MSG_INTERFACE_UNLOCK_IND 806
+#define SMS_MSG_SIGNAL_DETECTED_IND 827
+#define SMS_MSG_NO_SIGNAL_IND 828
+#define SMS_MSG_SET_PERIODIC_STATISTICS_REQ 836
+#define SMS_MSG_SET_PERIODIC_STATISTICS_RES 837
 #define SMS_MAX_PAYLOAD_SIZE 240
 #define SMS_DVBT_BDA_CONTROL_MSG_ID 201
 #define SMS_BW_ISDBT_1SEG 4
@@ -122,6 +132,8 @@ int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, ui
 int smsusb_add_pid_filter(smsusb_device_t *device, uint32_t pid, char *error, unsigned long error_len);
 int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_read_message_header(smsusb_device_t *device, sms_msg_hdr_t *header_out, unsigned int timeout_ms, char *error, unsigned long error_len);
+int smsusb_read_raw_message(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_get_isdbt_stats(smsusb_device_t *device, sms_isdbt_stats_summary_t *stats, char *error, unsigned long error_len);
+int smsusb_get_isdbt_stats_ex(smsusb_device_t *device, sms_isdbt_stats_summary_t *stats, char *error, unsigned long error_len);
 
 #endif
