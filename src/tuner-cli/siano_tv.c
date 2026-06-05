@@ -16,6 +16,8 @@ static void usage(const char *argv0) {
 #define BR_SCAN_MAX_CHANNEL 59
 #define BR_SCAN_EXTENDED_MAX_CHANNEL 69
 
+static void close_device_preserving_error(smsusb_device_t *device, char *error, unsigned long error_len);
+
 static int probe_command(void) {
     smsusb_device_t device;
     char error[256];
@@ -56,7 +58,7 @@ static int version_command(void) {
 
     rc = smsusb_get_version(&device, &version, 3000, error, sizeof(error));
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fprintf(stderr, "version failed: %s\n", error);
         return 1;
     }
@@ -98,7 +100,7 @@ static int usb_reset_command(void) {
     }
 
     rc = smsusb_reset(&device, error, sizeof(error));
-    smsusb_close(&device, error, sizeof(error));
+    close_device_preserving_error(&device, error, sizeof(error));
     if (rc != 0) {
         fprintf(stderr, "usb-reset failed: %s\n", error);
         return 1;
@@ -344,7 +346,7 @@ static int prepare_reception_command(void) {
 
     rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fprintf(stderr, "prepare-reception failed: %s\n", error);
         return 1;
     }
@@ -381,7 +383,7 @@ static int firmware_load_command(const char *path) {
     free(firmware);
 
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fprintf(stderr, "firmware-load failed: %s\n", error);
         return 1;
     }
@@ -415,14 +417,14 @@ static int tune_isdbt_command(const char *frequency_text) {
 
     rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fprintf(stderr, "tune-isdbt failed: %s\n", error);
         return 1;
     }
 
     rc = smsusb_tune_isdbt_segment(&device, (uint32_t)frequency, SMS_BW_ISDBT_13SEG, error, sizeof(error));
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fprintf(stderr, "tune-isdbt failed: %s\n", error);
         return 1;
     }
@@ -451,7 +453,7 @@ static int init_isdbt_command(void) {
 
     rc = ensure_isdbt_ready_mode(&device, SMS_DEVICE_MODE_ISDBT, error, sizeof(error));
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fprintf(stderr, "init-isdbt failed: %s\n", error);
         return 1;
     }
@@ -480,7 +482,7 @@ static int init_isdbt_bda_command(void) {
 
     rc = ensure_isdbt_ready_mode(&device, SMS_DEVICE_MODE_ISDBT_BDA, error, sizeof(error));
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fprintf(stderr, "init-isdbt-bda failed: %s\n", error);
         return 1;
     }
