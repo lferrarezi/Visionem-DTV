@@ -1,5 +1,6 @@
 #include "smsusb_transport.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,6 +120,36 @@ static unsigned char *read_file(const char *path, size_t *size_out) {
 
     *size_out = (size_t)size;
     return buffer;
+}
+
+static int ensure_parent_directory(const char *path) {
+    char buffer[1024];
+    snprintf(buffer, sizeof(buffer), "%s", path);
+
+    char *last_slash = strrchr(buffer, '/');
+    if (!last_slash) {
+        return 0;
+    }
+    if (last_slash == buffer) {
+        return 0;
+    }
+    *last_slash = '\0';
+
+    for (char *p = buffer + 1; *p; p++) {
+        if (*p != '/') {
+            continue;
+        }
+        *p = '\0';
+        mkdir(buffer, 0755);
+        *p = '/';
+    }
+    mkdir(buffer, 0755);
+    return 0;
+}
+
+static FILE *open_output_file(const char *path) {
+    ensure_parent_directory(path);
+    return fopen(path, "wb");
 }
 
 static const char *find_isdbt_firmware(void) {
@@ -458,9 +489,9 @@ static int capture_isdbt_command(const char *frequency_text, const char *seconds
         return 2;
     }
 
-    FILE *out = fopen(out_path, "wb");
+    FILE *out = open_output_file(out_path);
     if (!out) {
-        fprintf(stderr, "capture-isdbt failed: could not open %s\n", out_path);
+        fprintf(stderr, "capture-isdbt failed: could not open %s: %s\n", out_path, strerror(errno));
         return 1;
     }
 
@@ -1575,9 +1606,9 @@ static int choose_watch_mode(smsusb_device_t *device, uint32_t frequency, uint32
 }
 
 static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds, const char *out_path) {
-    FILE *out = fopen(out_path, "wb");
+    FILE *out = open_output_file(out_path);
     if (!out) {
-        fprintf(stderr, "watch-isdbt failed: could not open %s\n", out_path);
+        fprintf(stderr, "watch-isdbt failed: could not open %s: %s\n", out_path, strerror(errno));
         return 1;
     }
 
