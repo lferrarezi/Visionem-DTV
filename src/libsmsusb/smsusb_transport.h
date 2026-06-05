@@ -11,6 +11,7 @@
 #define SMSUSB_ENDPOINT_IN 0x81
 #define SMSUSB_ENDPOINT_OUT 0x02
 #define SMSUSB_ENDPOINT_MAX_PACKET 512
+#define SMS_MSG_HDR_FLAG_SPLIT_MSG 4
 
 typedef struct smsusb_device_info {
     uint16_t vendor_id;

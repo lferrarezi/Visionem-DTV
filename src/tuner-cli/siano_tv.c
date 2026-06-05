@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -122,6 +122,11 @@ static unsigned char *read_file(const char *path, size_t *size_out) {
 }
 
 static const char *find_isdbt_firmware(void) {
+    const char *override = getenv("SIANO_TV_FIRMWARE");
+    if (override && access(override, R_OK) == 0) {
+        return override;
+    }
+
     static char home_path[512];
     const char *home = getenv("HOME");
     if (home) {
@@ -152,6 +157,17 @@ static const char *find_isdbt_firmware(void) {
     }
 
     return NULL;
+}
+
+static int firmware_path_command(void) {
+    const char *path = find_isdbt_firmware();
+    if (!path) {
+        fprintf(stderr, "firmware-path failed: ISDB-T firmware not found\n");
+        return 1;
+    }
+    printf("siano-tv firmware-path\n");
+    printf("  %s\n", path);
+    return 0;
 }
 
 static uint32_t selected_isdbt_mode(void) {
@@ -1677,6 +1693,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && strcmp(argv[1], "version") == 0) {
         return version_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "firmware-path") == 0) {
+        return firmware_path_command();
     }
     if (argc == 2 && strcmp(argv[1], "init-isdbt") == 0) {
         return init_isdbt_command();

@@ -58,6 +58,9 @@ int smsusb_open(smsusb_device_t *device, char *error, unsigned long error_len) {
         return -1;
     }
 
+    libusb_clear_halt(handle, device->info.endpoint_in);
+    libusb_clear_halt(handle, device->info.endpoint_out);
+
     device->ctx = ctx;
     device->handle = handle;
     device->claimed = 1;
@@ -133,6 +136,8 @@ static int smsusb_send(smsusb_device_t *device, const void *buffer, int length, 
     return 0;
 }
 
+static int normalize_received_message(unsigned char *message, int transferred, size_t buffer_len, size_t *size_out, char *error, unsigned long error_len);
+
 static int smsusb_receive_message(smsusb_device_t *device, void *buffer, int buffer_len, unsigned int timeout_ms, char *error, unsigned long error_len) {
     int transferred = 0;
     libusb_device_handle *handle = (libusb_device_handle *)device->handle;
@@ -148,18 +153,48 @@ static int smsusb_receive_message(smsusb_device_t *device, void *buffer, int buf
         set_libusb_error(error, error_len, "bulk IN failed", rc);
         return -1;
     }
+    size_t normalized_size = 0;
+    rc = normalize_received_message((unsigned char *)buffer, transferred, (size_t)buffer_len, &normalized_size, error, error_len);
+    if (rc != 0) {
+        return -1;
+    }
+
+    return (int)normalized_size;
+}
+
+static int normalize_received_message(unsigned char *message, int transferred, size_t buffer_len, size_t *size_out, char *error, unsigned long error_len) {
     if (transferred < (int)sizeof(sms_msg_hdr_t)) {
         snprintf(error, error_len, "bulk IN short message: %d bytes", transferred);
         return -1;
     }
 
-    sms_msg_hdr_t *header = (sms_msg_hdr_t *)buffer;
-    if (header->msg_length > transferred) {
-        snprintf(error, error_len, "message length %u exceeds transfer %d", header->msg_length, transferred);
+    sms_msg_hdr_t *header = (sms_msg_hdr_t *)message;
+    if (header->msg_length < sizeof(sms_msg_hdr_t)) {
+        snprintf(error, error_len, "invalid message length %u", header->msg_length);
+        return -1;
+    }
+    if (header->msg_length > (uint16_t)buffer_len) {
+        snprintf(error, error_len, "message length %u exceeds buffer %lu", header->msg_length, (unsigned long)buffer_len);
         return -1;
     }
 
-    return transferred;
+    size_t offset = 0;
+    if (header->msg_flags & SMS_MSG_HDR_FLAG_SPLIT_MSG) {
+        offset = (SMSUSB_ENDPOINT_MAX_PACKET - sizeof(sms_msg_hdr_t)) + ((header->msg_flags >> 8) & 3);
+    }
+
+    if ((size_t)transferred < offset + header->msg_length) {
+        snprintf(error, error_len, "message length %u offset %lu exceeds transfer %d", header->msg_length, (unsigned long)offset, transferred);
+        return -1;
+    }
+
+    if (offset > 0) {
+        memmove(message + sizeof(sms_msg_hdr_t), message + offset + sizeof(sms_msg_hdr_t), header->msg_length - sizeof(sms_msg_hdr_t));
+    }
+
+    *size_out = header->msg_length;
+    set_error(error, error_len, "");
+    return 0;
 }
 
 static int smsusb_send_and_wait(smsusb_device_t *device, const void *request, int request_len, uint16_t expected_type, unsigned int timeout_ms, void *response, int response_len, char *error, unsigned long error_len) {
@@ -586,16 +621,13 @@ int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t
         set_libusb_error(error, error_len, "bulk IN failed", rc);
         return -1;
     }
-    if (transferred < (int)sizeof(sms_msg_hdr_t)) {
-        snprintf(error, error_len, "bulk IN short message: %d bytes", transferred);
+    size_t message_size = 0;
+    rc = normalize_received_message(message, transferred, sizeof(message), &message_size, error, error_len);
+    if (rc != 0) {
         return -1;
     }
 
     sms_msg_hdr_t *header = (sms_msg_hdr_t *)message;
-    if (header->msg_length > transferred) {
-        snprintf(error, error_len, "message length %u exceeds transfer %d", header->msg_length, transferred);
-        return -1;
-    }
     if (header->msg_type != SMS_MSG_DVBT_BDA_DATA) {
         return 0;
     }
@@ -678,20 +710,7 @@ int smsusb_read_raw_message(smsusb_device_t *device, unsigned char *buffer, size
         set_libusb_error(error, error_len, "bulk IN failed", rc);
         return -1;
     }
-    if (transferred < (int)sizeof(sms_msg_hdr_t)) {
-        snprintf(error, error_len, "bulk IN short message: %d bytes", transferred);
-        return -1;
-    }
-
-    sms_msg_hdr_t *header = (sms_msg_hdr_t *)buffer;
-    if (header->msg_length > transferred) {
-        snprintf(error, error_len, "message length %u exceeds transfer %d", header->msg_length, transferred);
-        return -1;
-    }
-
-    *size_out = (size_t)transferred;
-    set_error(error, error_len, "");
-    return 0;
+    return normalize_received_message(buffer, transferred, buffer_len, size_out, error, error_len);
 }
 
 static void parse_isdbt_stats_payload(const uint32_t *data, sms_isdbt_stats_summary_t *stats) {
