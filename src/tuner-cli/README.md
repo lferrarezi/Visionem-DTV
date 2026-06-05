@@ -29,6 +29,7 @@ Comandos esperados:
 ./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
 ./build/siano-tv debug-channel-br 23 5
 ./build/siano-tv pid-list-br 23
+./build/siano-tv stream-kick-br 23 enable-ts
 ./build/siano-tv stats-isdbt-ex 527142857
 SIANO_TV_MODE=isdbt-bda ./build/siano-tv scan-br
 ./build/siano-tv watch-isdbt 527142857 120 captures/watch.ts
@@ -53,6 +54,8 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 `watch-br` configura MTU `15792`, imprime contadores de mensagens brutas e aceita `SIANO_TV_PID_SRC` / `SIANO_TV_PID_DST` para testar rotas alternativas de filtro PID.
 
 `pid-list-br` instala os filtros PID usados pelo `watch-br` e consulta `MSG_SMS_GET_PID_FILTER_LIST_REQ` para verificar se o firmware registrou os filtros.
+
+`stream-kick-br` testa comandos experimentais de ativacao de dados (`enable-ts`, `data-pump`, `raw-capture`, `raw-abort`). `watch-br` aceita `SIANO_TV_STREAM_KICK=<lista>` para executar os mesmos kicks antes de aguardar TS.
 
 `SIANO_TV_FIRMWARE=/caminho/firmware.inp` força um firmware ISDB-T especifico. A leitura USB normaliza mensagens splitadas conforme a estrategia do driver Linux `smsusb`.
 

@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -556,6 +556,22 @@ static const char *msg_name(uint16_t type) {
     switch (type) {
     case SMS_MSG_DVBT_BDA_DATA:
         return "MSG_SMS_DVBT_BDA_DATA";
+    case SMS_MSG_DATA_MSG:
+        return "MSG_SMS_DATA_MSG";
+    case SMS_MSG_RAW_CAPTURE_START_RES:
+        return "MSG_SMS_RAW_CAPTURE_START_RES";
+    case SMS_MSG_RAW_CAPTURE_ABORT_RES:
+        return "MSG_SMS_RAW_CAPTURE_ABORT_RES";
+    case SMS_MSG_RAW_CAPTURE_COMPLETE_IND:
+        return "MSG_SMS_RAW_CAPTURE_COMPLETE_IND";
+    case SMS_MSG_DATA_PUMP_IND:
+        return "MSG_SMS_DATA_PUMP_IND";
+    case SMS_MSG_DATA_PUMP_RES:
+        return "MSG_SMS_DATA_PUMP_RES";
+    case SMS_MSG_ENABLE_TS_INTERFACE_RES:
+        return "MSG_SMS_ENABLE_TS_INTERFACE_RES";
+    case SMS_MSG_DISABLE_TS_INTERFACE_RES:
+        return "MSG_SMS_DISABLE_TS_INTERFACE_RES";
     case SMS_MSG_ISDBT_TUNE_RES:
         return "MSG_SMS_ISDBT_TUNE_RES";
     case SMS_MSG_RECEIVE_1SEG_THROUGH_FULLSEG_RES:
@@ -1449,6 +1465,56 @@ static int install_watch_pids(smsusb_device_t *device, char *error, unsigned lon
     return 0;
 }
 
+static int run_stream_kicks(smsusb_device_t *device, const char *spec) {
+    if (!spec || !*spec) {
+        return 0;
+    }
+
+    char local_error[256];
+    int failures = 0;
+    char spec_copy[256];
+    snprintf(spec_copy, sizeof(spec_copy), "%s", spec);
+
+    char *cursor = spec_copy;
+    while (cursor && *cursor) {
+        char *comma = strchr(cursor, ',');
+        if (comma) {
+            *comma = '\0';
+        }
+
+        int rc = 0;
+        if (strcmp(cursor, "enable-ts") == 0) {
+            rc = smsusb_send_data1_command(device, SMS_MSG_ENABLE_TS_INTERFACE_REQ, SMS_MSG_ENABLE_TS_INTERFACE_RES, 1, 1500, local_error, sizeof(local_error));
+        } else if (strcmp(cursor, "disable-ts") == 0) {
+            rc = smsusb_send_data1_command(device, SMS_MSG_DISABLE_TS_INTERFACE_REQ, SMS_MSG_DISABLE_TS_INTERFACE_RES, 0, 1500, local_error, sizeof(local_error));
+        } else if (strcmp(cursor, "data-pump") == 0) {
+            rc = smsusb_send_data1_command(device, SMS_MSG_DATA_PUMP_REQ, SMS_MSG_DATA_PUMP_RES, 1, 1500, local_error, sizeof(local_error));
+        } else if (strcmp(cursor, "raw-capture") == 0) {
+            rc = smsusb_send_data1_command(device, SMS_MSG_RAW_CAPTURE_START_REQ, SMS_MSG_RAW_CAPTURE_START_RES, 1, 1500, local_error, sizeof(local_error));
+        } else if (strcmp(cursor, "raw-abort") == 0) {
+            rc = smsusb_send_header_command_public(device, SMS_MSG_RAW_CAPTURE_ABORT_REQ, SMS_MSG_RAW_CAPTURE_ABORT_RES, 1500, local_error, sizeof(local_error));
+        } else {
+            printf("  stream kick %s: desconhecido\n", cursor);
+            failures++;
+            cursor = comma ? comma + 1 : NULL;
+            continue;
+        }
+
+        printf("  stream kick %s: %s%s%s\n",
+               cursor,
+               rc == 0 ? "ok" : "erro",
+               rc == 0 ? "" : " ",
+               rc == 0 ? "" : local_error);
+        if (rc != 0) {
+            failures++;
+        }
+
+        cursor = comma ? comma + 1 : NULL;
+    }
+
+    return failures == 0 ? 0 : -1;
+}
+
 static int choose_watch_mode(smsusb_device_t *device, uint32_t frequency, uint32_t *mode_out, char *error, unsigned long error_len) {
     const uint32_t modes[] = {SMS_BW_ISDBT_1SEG, SMS_BW_ISDBT_13SEG, SMS_BW_ISDBT_3SEG};
     int best_score = -2147483647;
@@ -1573,6 +1639,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
             return 1;
         }
     }
+    run_stream_kicks(&device, getenv("SIANO_TV_STREAM_KICK"));
 
     printf("siano-tv watch-isdbt\n");
     printf("  sistema: ISDB-Tb Brasil\n");
@@ -1762,6 +1829,77 @@ static int pid_list_br_command(const char *channel_text) {
     return 0;
 }
 
+static int stream_kick_br_command(int argc, char **argv) {
+    unsigned long channel = 0;
+    if (parse_ulong_arg(argv[2], BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
+        fprintf(stderr, "stream-kick-br failed: canal fisico deve estar entre 1 e 69\n");
+        return 2;
+    }
+    const char *kick_spec = argc >= 4 ? argv[3] : "enable-ts,data-pump";
+
+    uint32_t frequency = br_channel_frequency((unsigned int)channel);
+    if (!frequency) {
+        fprintf(stderr, "stream-kick-br failed: canal fisico fora da canalizacao conhecida\n");
+        return 2;
+    }
+
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "stream-kick-br failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc == 0) {
+        rc = smsusb_tune_isdbt_segment(&device, frequency, SMS_BW_ISDBT_13SEG, error, sizeof(error));
+    }
+    if (rc == 0) {
+        rc = install_watch_pids(&device, error, sizeof(error));
+    }
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "stream-kick-br failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv stream-kick-br\n");
+    printf("  canal: %lu\n", channel);
+    printf("  frequency: %u Hz\n", frequency);
+    printf("  kicks: %s\n", kick_spec);
+    run_stream_kicks(&device, kick_spec);
+
+    unsigned long messages = 0;
+    unsigned long timeouts = 0;
+    time_t end_time = time(NULL) + 5;
+    while (time(NULL) < end_time) {
+        unsigned char raw_message[32768];
+        size_t raw_size = 0;
+        rc = smsusb_read_raw_message(&device, raw_message, sizeof(raw_message), &raw_size, 500, error, sizeof(error));
+        if (rc != 0) {
+            printf("  read_error=%s\n", error);
+            break;
+        }
+        if (raw_size == 0) {
+            timeouts++;
+            continue;
+        }
+        sms_msg_hdr_t *header = (sms_msg_hdr_t *)raw_message;
+        messages++;
+        printf("  msg type=%u %s length=%u src=%u dst=%u flags=0x%04x\n",
+               header->msg_type,
+               msg_name(header->msg_type),
+               header->msg_length,
+               header->msg_src_id,
+               header->msg_dst_id,
+               header->msg_flags);
+    }
+    smsusb_close(&device, error, sizeof(error));
+    printf("  summary messages=%lu timeouts=%lu\n", messages, timeouts);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -1809,6 +1947,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 3 && strcmp(argv[1], "pid-list-br") == 0) {
         return pid_list_br_command(argv[2]);
+    }
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "stream-kick-br") == 0) {
+        return stream_kick_br_command(argc, argv);
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
         return watch_br_command(argc, argv);

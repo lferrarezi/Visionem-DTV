@@ -489,6 +489,76 @@ static int smsusb_send_header_command(smsusb_device_t *device, uint16_t request_
     return 0;
 }
 
+int smsusb_send_header_command_public(smsusb_device_t *device, uint16_t request_type, uint16_t response_type, unsigned int timeout_ms, char *error, unsigned long error_len) {
+    if (!device || !device->handle) {
+        set_error(error, error_len, "invalid header command arguments");
+        return -1;
+    }
+
+    sms_msg_hdr_t request;
+    sms_msg_init_ex(
+        &request,
+        request_type,
+        SMS_DVBT_BDA_CONTROL_MSG_ID,
+        SMS_HIF_TASK,
+        sizeof(request)
+    );
+
+    int rc = smsusb_send_and_wait(
+        device,
+        &request,
+        sizeof(request),
+        response_type,
+        timeout_ms,
+        NULL,
+        0,
+        error,
+        error_len
+    );
+    if (rc < 0) {
+        return -1;
+    }
+
+    set_error(error, error_len, "");
+    return 0;
+}
+
+int smsusb_send_data1_command(smsusb_device_t *device, uint16_t request_type, uint16_t response_type, uint32_t data, unsigned int timeout_ms, char *error, unsigned long error_len) {
+    if (!device || !device->handle) {
+        set_error(error, error_len, "invalid data1 command arguments");
+        return -1;
+    }
+
+    sms_msg_data1_t request;
+    memset(&request, 0, sizeof(request));
+    sms_msg_init_ex(
+        &request.header,
+        request_type,
+        SMS_DVBT_BDA_CONTROL_MSG_ID,
+        SMS_HIF_TASK,
+        sizeof(request)
+    );
+    request.data = data;
+
+    int rc = smsusb_send_and_wait(
+        device,
+        &request,
+        sizeof(request),
+        response_type,
+        timeout_ms,
+        NULL,
+        0,
+        error,
+        error_len
+    );
+    if (rc < 0) {
+        return -1;
+    }
+
+    set_error(error, error_len, "");
+    return 0;
+}
+
 int smsusb_receive_1seg_through_fullseg(smsusb_device_t *device, char *error, unsigned long error_len) {
     return smsusb_send_header_command(
         device,

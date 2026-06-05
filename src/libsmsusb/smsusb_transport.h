@@ -92,6 +92,19 @@ typedef struct sms_isdbt_stats_summary {
 #define SMS_MSG_ISDBT_TUNE_REQ 776
 #define SMS_MSG_ISDBT_TUNE_RES 777
 #define SMS_MSG_DVBT_BDA_DATA 693
+#define SMS_MSG_DATA_MSG 699
+#define SMS_MSG_RAW_CAPTURE_START_REQ 720
+#define SMS_MSG_RAW_CAPTURE_START_RES 721
+#define SMS_MSG_RAW_CAPTURE_ABORT_REQ 722
+#define SMS_MSG_RAW_CAPTURE_ABORT_RES 723
+#define SMS_MSG_RAW_CAPTURE_COMPLETE_IND 728
+#define SMS_MSG_DATA_PUMP_IND 729
+#define SMS_MSG_DATA_PUMP_REQ 730
+#define SMS_MSG_DATA_PUMP_RES 731
+#define SMS_MSG_ENABLE_TS_INTERFACE_REQ 736
+#define SMS_MSG_ENABLE_TS_INTERFACE_RES 737
+#define SMS_MSG_DISABLE_TS_INTERFACE_REQ 742
+#define SMS_MSG_DISABLE_TS_INTERFACE_RES 743
 #define SMS_MSG_INIT_DEVICE_REQ 578
 #define SMS_MSG_INIT_DEVICE_RES 579
 #define SMS_MSG_ADD_PID_FILTER_REQ 601
@@ -141,6 +154,8 @@ int smsusb_init_isdbt(smsusb_device_t *device, char *error, unsigned long error_
 int smsusb_set_max_tx_msg_len(smsusb_device_t *device, uint32_t length, char *error, unsigned long error_len);
 int smsusb_receive_1seg_through_fullseg(smsusb_device_t *device, char *error, unsigned long error_len);
 int smsusb_receive_vhf_via_vhf_input(smsusb_device_t *device, char *error, unsigned long error_len);
+int smsusb_send_data1_command(smsusb_device_t *device, uint16_t request_type, uint16_t response_type, uint32_t data, unsigned int timeout_ms, char *error, unsigned long error_len);
+int smsusb_send_header_command_public(smsusb_device_t *device, uint16_t request_type, uint16_t response_type, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_tune_isdbt(smsusb_device_t *device, uint32_t frequency_hz, char *error, unsigned long error_len);
 int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, uint32_t segment_width, char *error, unsigned long error_len);
 int smsusb_add_pid_filter(smsusb_device_t *device, uint32_t pid, char *error, unsigned long error_len);
