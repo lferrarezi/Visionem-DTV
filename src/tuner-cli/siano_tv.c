@@ -1,5 +1,7 @@
 #include "smsusb_transport.h"
 
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +11,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -17,6 +19,95 @@ static void usage(const char *argv0) {
 #define BR_SCAN_EXTENDED_MAX_CHANNEL 69
 
 static void close_device_preserving_error(smsusb_device_t *device, char *error, unsigned long error_len);
+
+static int cf_number_to_u32(CFTypeRef value, uint32_t *out) {
+    if (!value || CFGetTypeID(value) != CFNumberGetTypeID()) {
+        return 0;
+    }
+    int number = 0;
+    if (!CFNumberGetValue((CFNumberRef)value, kCFNumberIntType, &number)) {
+        return 0;
+    }
+    *out = (uint32_t)number;
+    return 1;
+}
+
+static void copy_cf_string(CFTypeRef value, char *buffer, size_t buffer_len) {
+    if (!buffer || buffer_len == 0) {
+        return;
+    }
+    snprintf(buffer, buffer_len, "<missing>");
+    if (!value || CFGetTypeID(value) != CFStringGetTypeID()) {
+        return;
+    }
+    CFStringGetCString((CFStringRef)value, buffer, buffer_len, kCFStringEncodingUTF8);
+}
+
+static int usb_state_command(void) {
+    CFMutableDictionaryRef matching = IOServiceMatching("IOUSBHostDevice");
+    if (!matching) {
+        fprintf(stderr, "usb-state failed: IOUSBHostDevice matching unavailable\n");
+        return 2;
+    }
+
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "usb-state failed: IOServiceGetMatchingServices 0x%x\n", kr);
+        return 2;
+    }
+
+    int md_tv_count = 0;
+    int mxt_count = 0;
+    printf("siano-tv usb-state\n");
+    io_registry_entry_t service;
+    while ((service = IOIteratorNext(iterator)) != IO_OBJECT_NULL) {
+        CFMutableDictionaryRef props = NULL;
+        kr = IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, kNilOptions);
+        IOObjectRelease(service);
+        if (kr != KERN_SUCCESS || !props) {
+            continue;
+        }
+
+        uint32_t vendor_id = 0;
+        uint32_t product_id = 0;
+        uint32_t location_id = 0;
+        uint32_t usb_address = 0;
+        cf_number_to_u32(CFDictionaryGetValue(props, CFSTR("idVendor")), &vendor_id);
+        cf_number_to_u32(CFDictionaryGetValue(props, CFSTR("idProduct")), &product_id);
+        cf_number_to_u32(CFDictionaryGetValue(props, CFSTR("locationID")), &location_id);
+        cf_number_to_u32(CFDictionaryGetValue(props, CFSTR("USB Address")), &usb_address);
+
+        char product[256];
+        char owner[256];
+        copy_cf_string(CFDictionaryGetValue(props, CFSTR("USB Product Name")), product, sizeof(product));
+        copy_cf_string(CFDictionaryGetValue(props, CFSTR("UsbExclusiveOwner")), owner, sizeof(owner));
+
+        if (vendor_id == SMSUSB_VENDOR_ID && product_id == SMSUSB_PRODUCT_ID) {
+            md_tv_count++;
+            printf("  mdtv: present vidpid=%04x:%04x location=0x%08x address=%u product=\"%s\" owner=\"%s\"\n",
+                   vendor_id,
+                   product_id,
+                   location_id,
+                   usb_address,
+                   product,
+                   owner);
+        } else if (vendor_id == 0xaaaa && product_id == 0x8816) {
+            mxt_count++;
+            printf("  mxt: present vidpid=%04x:%04x location=0x%08x address=%u product=\"%s\"\n",
+                   vendor_id,
+                   product_id,
+                   location_id,
+                   usb_address,
+                   product);
+        }
+        CFRelease(props);
+    }
+    IOObjectRelease(iterator);
+
+    printf("  summary: mdtv=%d mxt=%d\n", md_tv_count, mxt_count);
+    return md_tv_count > 0 ? 0 : 1;
+}
 
 static int probe_command(void) {
     smsusb_device_t device;
@@ -1986,6 +2077,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && strcmp(argv[1], "version") == 0) {
         return version_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "usb-state") == 0) {
+        return usb_state_command();
     }
     if (argc == 2 && strcmp(argv[1], "usb-reset") == 0) {
         return usb_reset_command();

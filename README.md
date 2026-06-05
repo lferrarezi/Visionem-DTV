@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.6.10`.
+Versao local: `1.6.11`.
 
 ## Estado Atual
 
@@ -123,7 +123,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.6.10-macos-installer.pkg
+dist/siano-tv-1.6.11-macos-installer.pkg
 ```
 
 O instalador coloca:
