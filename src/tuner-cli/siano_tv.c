@@ -174,10 +174,34 @@ static FILE *open_output_file(const char *path) {
     return fopen(path, "wb");
 }
 
+static void close_device_preserving_error(smsusb_device_t *device, char *error, unsigned long error_len) {
+    char original[256];
+    snprintf(original, sizeof(original), "%s", error ? error : "");
+    smsusb_close(device, error, error_len);
+    if (error && error_len > 0 && original[0]) {
+        snprintf(error, error_len, "%s", original);
+    }
+}
+
 static const char *find_isdbt_firmware(void) {
     const char *override = getenv("SIANO_TV_FIRMWARE");
     if (override && access(override, R_OK) == 0) {
         return override;
+    }
+
+    const char *paths[] = {
+        "firmware/isdbt_nova_12mhz_b0_official_2010.inp",
+        "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0_official_2010.inp",
+        "firmware/isdbt_nova_12mhz_b0.inp",
+        "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp",
+        "/usr/local/share/siano-tv/firmware/isdbt_nova_12mhz_b0.inp",
+        "/Users/lferrarezi/Downloads/Infinito PenTV/Mini_PENTV_USB/Linux/isdbt_nova_12mhz_b0.inp",
+    };
+
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        if (access(paths[i], R_OK) == 0) {
+            return paths[i];
+        }
     }
 
     static char home_path[512];
@@ -191,21 +215,6 @@ static const char *find_isdbt_firmware(void) {
         );
         if (written > 0 && (size_t)written < sizeof(home_path) && access(home_path, R_OK) == 0) {
             return home_path;
-        }
-    }
-
-    const char *paths[] = {
-        "firmware/isdbt_nova_12mhz_b0_official_2010.inp",
-        "firmware/isdbt_nova_12mhz_b0.inp",
-        "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0_official_2010.inp",
-        "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp",
-        "/usr/local/share/siano-tv/firmware/isdbt_nova_12mhz_b0.inp",
-        "/Users/lferrarezi/Downloads/Infinito PenTV/Mini_PENTV_USB/Linux/isdbt_nova_12mhz_b0.inp",
-    };
-
-    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-        if (access(paths[i], R_OK) == 0) {
-            return paths[i];
         }
     }
 
@@ -1666,7 +1675,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         rc = choose_watch_mode(&device, (uint32_t)frequency, &selected_mode, error, sizeof(error));
     }
     if (rc != 0) {
-        smsusb_close(&device, error, sizeof(error));
+        close_device_preserving_error(&device, error, sizeof(error));
         fclose(out);
         fprintf(stderr, "watch-isdbt failed: %s\n", error);
         return 1;
@@ -1697,7 +1706,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
     if (!env_flag_enabled("SIANO_TV_PID_BEFORE_TUNE")) {
         rc = install_watch_pids(&device, error, sizeof(error));
         if (rc != 0) {
-            smsusb_close(&device, error, sizeof(error));
+            close_device_preserving_error(&device, error, sizeof(error));
             fclose(out);
             fprintf(stderr, "watch-isdbt failed: %s\n", error);
             return 1;
@@ -1800,7 +1809,7 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         }
     }
 
-    smsusb_close(&device, error, sizeof(error));
+    close_device_preserving_error(&device, error, sizeof(error));
     fclose(out);
 
     if (rc != 0) {
