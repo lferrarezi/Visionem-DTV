@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -1514,6 +1514,9 @@ static int run_stream_kicks(smsusb_device_t *device, const char *spec) {
         }
 
         int rc = 0;
+        unsigned int request_type = 0;
+        unsigned int response_type = 0;
+        unsigned int data_value = 0;
         if (strcmp(cursor, "enable-ts") == 0) {
             rc = smsusb_send_data1_command(device, SMS_MSG_ENABLE_TS_INTERFACE_REQ, SMS_MSG_ENABLE_TS_INTERFACE_RES, 1, 1500, local_error, sizeof(local_error));
         } else if (strcmp(cursor, "disable-ts") == 0) {
@@ -1524,6 +1527,12 @@ static int run_stream_kicks(smsusb_device_t *device, const char *spec) {
             rc = smsusb_send_data1_command(device, SMS_MSG_RAW_CAPTURE_START_REQ, SMS_MSG_RAW_CAPTURE_START_RES, 1, 1500, local_error, sizeof(local_error));
         } else if (strcmp(cursor, "raw-abort") == 0) {
             rc = smsusb_send_header_command_public(device, SMS_MSG_RAW_CAPTURE_ABORT_REQ, SMS_MSG_RAW_CAPTURE_ABORT_RES, 1500, local_error, sizeof(local_error));
+        } else if (sscanf(cursor, "data:%u:%u:%u", &request_type, &response_type, &data_value) == 3 &&
+                   request_type <= 65535 && response_type <= 65535) {
+            rc = smsusb_send_data1_command(device, (uint16_t)request_type, (uint16_t)response_type, data_value, 1500, local_error, sizeof(local_error));
+        } else if (sscanf(cursor, "header:%u:%u", &request_type, &response_type) == 2 &&
+                   request_type <= 65535 && response_type <= 65535) {
+            rc = smsusb_send_header_command_public(device, (uint16_t)request_type, (uint16_t)response_type, 1500, local_error, sizeof(local_error));
         } else {
             printf("  stream kick %s: desconhecido\n", cursor);
             failures++;

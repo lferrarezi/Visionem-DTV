@@ -3,6 +3,7 @@
 #include <libusb.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define SMSUSB_LARGE_MESSAGE_SIZE 32768
@@ -111,6 +112,30 @@ static void sms_msg_init_ex(sms_msg_hdr_t *header, uint16_t type, uint8_t src, u
     header->msg_dst_id = dst;
     header->msg_length = length;
     header->msg_flags = 0;
+}
+
+static uint8_t env_u8_or_default(const char *name, uint8_t fallback) {
+    const char *value = getenv(name);
+    if (!value || !*value) {
+        return fallback;
+    }
+
+    char *end = NULL;
+    unsigned long parsed = strtoul(value, &end, 0);
+    if (end == value || *end != '\0' || parsed > 255) {
+        return fallback;
+    }
+    return (uint8_t)parsed;
+}
+
+static void sms_msg_init_control(sms_msg_hdr_t *header, uint16_t type, uint16_t length) {
+    sms_msg_init_ex(
+        header,
+        type,
+        env_u8_or_default("SIANO_TV_CTRL_SRC", SMS_DVBT_BDA_CONTROL_MSG_ID),
+        env_u8_or_default("SIANO_TV_CTRL_DST", SMS_HIF_TASK),
+        length
+    );
 }
 
 static int smsusb_send(smsusb_device_t *device, const void *buffer, int length, char *error, unsigned long error_len) {
@@ -462,13 +487,7 @@ static int smsusb_send_header_command(smsusb_device_t *device, uint16_t request_
     }
 
     sms_msg_hdr_t request;
-    sms_msg_init_ex(
-        &request,
-        request_type,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
-        sizeof(request)
-    );
+    sms_msg_init_control(&request, request_type, sizeof(request));
 
     int rc = smsusb_send_and_wait(
         device,
@@ -496,13 +515,7 @@ int smsusb_send_header_command_public(smsusb_device_t *device, uint16_t request_
     }
 
     sms_msg_hdr_t request;
-    sms_msg_init_ex(
-        &request,
-        request_type,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
-        sizeof(request)
-    );
+    sms_msg_init_control(&request, request_type, sizeof(request));
 
     int rc = smsusb_send_and_wait(
         device,
@@ -531,13 +544,7 @@ int smsusb_send_data1_command(smsusb_device_t *device, uint16_t request_type, ui
 
     sms_msg_data1_t request;
     memset(&request, 0, sizeof(request));
-    sms_msg_init_ex(
-        &request.header,
-        request_type,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
-        sizeof(request)
-    );
+    sms_msg_init_control(&request.header, request_type, sizeof(request));
     request.data = data;
 
     int rc = smsusb_send_and_wait(
@@ -587,13 +594,7 @@ int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, ui
 
     sms_msg_data4_t tune;
     memset(&tune, 0, sizeof(tune));
-    sms_msg_init_ex(
-        &tune.header,
-        SMS_MSG_ISDBT_TUNE_REQ,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
-        sizeof(tune)
-    );
+    sms_msg_init_control(&tune.header, SMS_MSG_ISDBT_TUNE_REQ, sizeof(tune));
     tune.data[0] = frequency_hz;
     tune.data[1] = segment_width;
     tune.data[2] = 12000000;
@@ -673,13 +674,7 @@ int smsusb_get_pid_filter_list(smsusb_device_t *device, uint32_t *pids, size_t m
 
     *count_out = 0;
     sms_msg_hdr_t request;
-    sms_msg_init_ex(
-        &request,
-        SMS_MSG_GET_PID_FILTER_LIST_REQ,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
-        sizeof(request)
-    );
+    sms_msg_init_control(&request, SMS_MSG_GET_PID_FILTER_LIST_REQ, sizeof(request));
 
     unsigned char response[SMSUSB_LARGE_MESSAGE_SIZE];
     int rc = smsusb_send_and_wait(
@@ -869,13 +864,7 @@ int smsusb_get_isdbt_stats(smsusb_device_t *device, sms_isdbt_stats_summary_t *s
     }
 
     sms_msg_hdr_t request;
-    sms_msg_init_ex(
-        &request,
-        SMS_MSG_GET_STATISTICS_REQ,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
-        sizeof(request)
-    );
+    sms_msg_init_control(&request, SMS_MSG_GET_STATISTICS_REQ, sizeof(request));
 
     unsigned char response[SMSUSB_LARGE_MESSAGE_SIZE];
     int rc = smsusb_send_and_wait(
@@ -914,13 +903,7 @@ int smsusb_get_isdbt_stats_ex(smsusb_device_t *device, sms_isdbt_stats_summary_t
     }
 
     sms_msg_hdr_t request;
-    sms_msg_init_ex(
-        &request,
-        SMS_MSG_GET_STATISTICS_EX_REQ,
-        SMS_DVBT_BDA_CONTROL_MSG_ID,
-        SMS_HIF_TASK,
-        sizeof(request)
-    );
+    sms_msg_init_control(&request, SMS_MSG_GET_STATISTICS_EX_REQ, sizeof(request));
 
     unsigned char response[SMSUSB_LARGE_MESSAGE_SIZE];
     int rc = smsusb_send_and_wait(
