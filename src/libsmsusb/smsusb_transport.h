@@ -147,6 +147,7 @@ static inline smsusb_device_info_t smsusb_known_device(void) {
 
 int smsusb_open(smsusb_device_t *device, char *error, unsigned long error_len);
 int smsusb_close(smsusb_device_t *device, char *error, unsigned long error_len);
+int smsusb_reset(smsusb_device_t *device, char *error, unsigned long error_len);
 int smsusb_get_version(smsusb_device_t *device, sms_version_res_t *version, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_load_firmware(smsusb_device_t *device, const unsigned char *firmware, size_t firmware_size, char *error, unsigned long error_len);
 int smsusb_init_device_mode(smsusb_device_t *device, uint32_t mode, char *error, unsigned long error_len);

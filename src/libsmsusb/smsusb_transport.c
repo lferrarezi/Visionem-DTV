@@ -80,7 +80,7 @@ int smsusb_close(smsusb_device_t *device, char *error, unsigned long error_len) 
 
     if (handle && device->claimed) {
         int rc = libusb_release_interface(handle, device->info.interface_number);
-        if (rc < 0) {
+        if (rc < 0 && rc != LIBUSB_ERROR_NO_DEVICE) {
             set_libusb_error(error, error_len, "libusb_release_interface failed", rc);
             return -1;
         }
@@ -94,6 +94,23 @@ int smsusb_close(smsusb_device_t *device, char *error, unsigned long error_len) 
     }
 
     memset(device, 0, sizeof(*device));
+    set_error(error, error_len, "");
+    return 0;
+}
+
+int smsusb_reset(smsusb_device_t *device, char *error, unsigned long error_len) {
+    if (!device || !device->handle) {
+        set_error(error, error_len, "invalid reset arguments");
+        return -1;
+    }
+
+    libusb_device_handle *handle = (libusb_device_handle *)device->handle;
+    int rc = libusb_reset_device(handle);
+    if (rc < 0 && rc != LIBUSB_ERROR_NO_DEVICE) {
+        set_libusb_error(error, error_len, "libusb_reset_device failed", rc);
+        return -1;
+    }
+
     set_error(error, error_len, "");
     return 0;
 }
@@ -232,7 +249,15 @@ static int smsusb_send_and_wait(smsusb_device_t *device, const void *request, in
     void *buffer = response ? response : local_buffer;
     int buffer_len = response ? response_len : (int)sizeof(local_buffer);
 
-    for (;;) {
+    unsigned int attempts = timeout_ms > 0 ? (10000 / timeout_ms) + 1 : 1;
+    if (attempts < 2) {
+        attempts = 2;
+    }
+    if (attempts > 20) {
+        attempts = 20;
+    }
+
+    for (unsigned int attempt = 0; attempt < attempts; attempt++) {
         rc = smsusb_receive_message(device, buffer, buffer_len, timeout_ms, error, error_len);
         if (rc < 0) {
             return -1;
@@ -243,6 +268,9 @@ static int smsusb_send_and_wait(smsusb_device_t *device, const void *request, in
             return rc;
         }
     }
+
+    snprintf(error, error_len, "timeout waiting for response type %u", expected_type);
+    return -1;
 }
 
 int smsusb_get_version(smsusb_device_t *device, sms_version_res_t *version, unsigned int timeout_ms, char *error, unsigned long error_len) {

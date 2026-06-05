@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -84,6 +84,28 @@ static int version_command(void) {
         return 1;
     }
 
+    return 0;
+}
+
+static int usb_reset_command(void) {
+    smsusb_device_t device;
+    char error[256];
+
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "usb-reset failed: %s\n", error);
+        return 1;
+    }
+
+    rc = smsusb_reset(&device, error, sizeof(error));
+    smsusb_close(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "usb-reset failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv usb-reset\n");
+    printf("  reset: ok\n");
     return 0;
 }
 
@@ -1953,6 +1975,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && strcmp(argv[1], "version") == 0) {
         return version_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "usb-reset") == 0) {
+        return usb_reset_command();
     }
     if (argc == 2 && strcmp(argv[1], "firmware-path") == 0) {
         return firmware_path_command();
