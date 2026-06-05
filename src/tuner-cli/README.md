@@ -1,6 +1,6 @@
-# tuner-cli
+# Siano TV Digital CLI
 
-Futuro CLI para operar o receptor depois que `libsmsusb` existir.
+CLI para operar o receptor Siano/Infinitoo TV Digital em macOS user-space.
 
 Comandos esperados:
 
@@ -20,6 +20,12 @@ Comandos esperados:
 ./build/siano-tv tune-isdbt 473142857
 ./build/siano-tv capture-isdbt 473142857 10 capture.ts
 ./build/siano-tv scan-isdbt
+./build/siano-tv channels-br
+./build/siano-tv channels-br-extended
+./build/siano-tv scan-br
+./build/siano-tv scan-br-extended
+./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
+SIANO_TV_MODE=isdbt-bda ./build/siano-tv scan-br
 ./build/siano-tv watch-isdbt 527142857 120 captures/watch.ts
 ```
 
@@ -32,6 +38,10 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 `tune-isdbt` envia `MSG_SMS_ISDBT_TUNE_REQ` para uma frequencia em Hz.
 
 `capture-isdbt` sintoniza e grava payloads `MSG_SMS_DVBT_BDA_DATA` em MPEG-TS bruto.
+
+`scan-br` cobre a canalizacao brasileira padrao 1-59. `scan-br-extended` cobre 1-69 para investigacao historica ou diagnostica.
+
+`diag-br` testa offsets finos e modos `1seg`, `13seg` e `3seg`, gravando CSV para comparar combinacoes.
 
 Estado validado no Mac local:
 

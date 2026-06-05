@@ -47,12 +47,14 @@ Terceiro criterio: capturar pacotes MPEG-TS validos.
 Status atual:
 
 - `MSG_SMS_GET_VERSION_EX_REQ`: validado.
-- Upload `isdbt_nova_12mhz_b0.inp`: validado, firmware passa para `DEVICE_MODE_ISDBT`.
+- Upload `isdbt_nova_12mhz_b0_official_2010.inp` e fallback `isdbt_nova_12mhz_b0.inp`: validado, firmware passa para `DEVICE_MODE_ISDBT`.
 - `MSG_SMS_INIT_DEVICE_REQ`: validado.
 - `MSG_SMS_ISDBT_TUNE_REQ`: validado.
 - `MSG_SMS_SIGNAL_DETECTED_IND`: observado em frequencias UHF testadas.
 - `MSG_SMS_GET_STATISTICS_REQ`: validado; RF lock aparece em canais testados.
 - `MSG_SMS_DVBT_BDA_DATA`: ainda nao observado; captura TS permanece com 0 bytes.
+- `DEVICE_MODE_ISDBT_BDA`: implementado como modo alternativo via `SIANO_TV_MODE=isdbt-bda`.
+- Canalizacao brasileira: `scan-br` varre canais 1-59; `scan-br-extended` varre 1-69 para diagnostico/historico.
 
 Hipoteses abertas:
 
@@ -67,9 +69,10 @@ Comandos planejados:
 
 ```sh
 siano-tv probe
-siano-tv firmware load firmware/isdbt_nova_12mhz_b0.inp
-siano-tv tune --frequency 473142857 --bandwidth 6MHz --out capture.ts
-siano-tv scan --country BR --out channels.m3u
+siano-tv scan-br
+siano-tv scan-br-extended
+siano-tv diag-br 23 2 captures/diag-canal-23.csv
+siano-tv watch-br 23 300 captures/canal-23.ts
 ```
 
 ## Fase 4 - App macOS

@@ -32,4 +32,5 @@ echo
 echo "Try:"
 echo "  $PREFIX/bin/siano-tv version"
 echo "  $PREFIX/bin/siano-tv scan-br"
+echo "  $PREFIX/bin/siano-tv scan-br-extended"
 echo "  $PREFIX/bin/siano-tv watch-br 23 300 captures/canal-23.ts"

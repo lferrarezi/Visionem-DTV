@@ -1,8 +1,8 @@
-# USB TV Digital Driver
+# Siano TV Digital
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.3.0`.
+Versao local: `1.4.0`.
 
 ## Estado Atual
 
@@ -13,7 +13,7 @@ O dispositivo local foi identificado no macOS como:
 - Fabricante real: `Siano Mobile Silicon`
 - Modelo conhecido no Linux: `Siano Mobile Silicon Nice`
 - Driver Linux de referencia: `smsusb` / `smsdvb`
-- Firmware usado: `isdbt_nova_12mhz_b0.inp` para ISDB-Tb Brasil
+- Firmware usado: `isdbt_nova_12mhz_b0_official_2010.inp` quando disponivel, com fallback para `isdbt_nova_12mhz_b0.inp`
 
 Tambem foi detectado um `MXT USB Device` (`aaaa:8816`), que aparenta ser armazenamento/leitor USB e nao o tuner.
 
@@ -24,7 +24,7 @@ Construir uma cadeia de suporte em macOS somente para o sistema brasileiro de TV
 1. Enumerar e abrir o dispositivo USB `187f:0202`.
 2. Entender e reproduzir o protocolo Siano usado pelo driver Linux.
 3. Carregar automaticamente o firmware ISDB-Tb.
-4. Sintonizar canais fisicos brasileiros VHF 7-13 e UHF 14-51 em 6 MHz/full-seg.
+4. Sintonizar canais fisicos brasileiros em 6 MHz: varredura padrao 1-59 e varredura estendida 1-69 para diagnostico/historico.
 5. Capturar o fluxo MPEG-TS para arquivo, stdout ou player externo.
 
 ## Primeiros Comandos
@@ -53,7 +53,9 @@ Esse script carrega firmware, varre canais, tenta capturar MPEG-TS e abre `ffpla
 Para um teste manual em tempo real enquanto ajusta a antena:
 
 ```sh
+./build/siano-tv channels-br
 ./build/siano-tv scan-br
+./build/siano-tv scan-br-extended
 ./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
 ./build/siano-tv watch-br 23 300 captures/canal-23.ts
 ```
@@ -63,6 +65,17 @@ O comando imprime lock/estatisticas a cada segundo, grava MPEG-TS se aparecer, e
 O dispositivo informado nao aceita antena externa. Para teste real, mova o dongle inteiro para perto de janela ou area aberta e rode `watch-br` no canal fisico mais promissor do `scan-br`.
 
 Se `scan-br` ficar em `rf=1 demod=0`, rode `diag-br`. Ele testa offsets finos ao redor do centro do canal e variantes `1seg`, `13seg` e `3seg`, grava CSV e imprime a melhor combinacao para um teste `watch-isdbt`.
+
+## Canalizacao Brasileira
+
+`scan-br` cobre canais fisicos 1-59 para maximizar a captura local sem varrer lixo de espectro. A leitura pratica e:
+
+- canal 1: legado/diagnostico, centro aproximado em 47,142857 MHz;
+- canais 2-6: VHF baixo, 54-88 MHz;
+- canais 7-13: VHF alto, 174-216 MHz;
+- canais 14-59: UHF atual, 470-746 MHz.
+
+`scan-br-extended` vai ate o canal 69 para investigar alocacoes antigas ou situacoes excepcionais, mas nao e o caminho padrao porque acima do canal 59 a faixa de 700 MHz foi reorganizada no Brasil.
 
 Para testar o modo alternativo observado na referencia Linux antiga:
 
@@ -98,7 +111,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.3.0-macos-installer.pkg
+dist/siano-tv-1.4.0-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -111,6 +124,8 @@ Depois de instalar, abra `Siano TV Digital.app` para iniciar um scan brasileiro 
 
 ```sh
 /usr/local/bin/siano-tv scan-br
+/usr/local/bin/siano-tv channels-br
+/usr/local/bin/siano-tv scan-br-extended
 /usr/local/bin/siano-tv watch-br 23 300 ~/Movies/SianoTV/canal-23.ts
 ```
 
@@ -124,7 +139,9 @@ Depois:
 
 ```sh
 ~/.local/bin/siano-tv version
+~/.local/bin/siano-tv channels-br
 ~/.local/bin/siano-tv scan-br
+~/.local/bin/siano-tv scan-br-extended
 ~/.local/bin/siano-tv watch-br 23 300 captures/canal-23.ts
 ```
 
@@ -151,6 +168,6 @@ Validado neste Mac:
 - `src/probe`: probe nativo macOS baseado em IOKit.
 - `src/probe/siano_libusb_probe.c`: probe libusb para descritores, interfaces e endpoints.
 - `src/libsmsusb`: futura biblioteca de protocolo Siano.
-- `src/tuner-cli`: futuro CLI para firmware, scan e captura.
-- `src/tuner-cli/siano_tv.c`: CLI inicial com comando `probe`.
+- `src/tuner-cli`: CLI para firmware, scan, diagnostico fino e captura.
+- `src/tuner-cli/siano_tv.c`: CLI principal `siano-tv`.
 - `firmware`: instrucoes para obter firmware; blobs binarios nao sao versionados por padrao.

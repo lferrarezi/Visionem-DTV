@@ -8,8 +8,12 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|scan-br|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|init-isdbt-bda|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
+
+#define BR_SCAN_MIN_CHANNEL 1
+#define BR_SCAN_MAX_CHANNEL 59
+#define BR_SCAN_EXTENDED_MAX_CHANNEL 69
 
 static int probe_command(void) {
     smsusb_device_t device;
@@ -607,18 +611,81 @@ static uint32_t uhf_channel_frequency(unsigned int channel) {
     return 473142857U + ((channel - 14U) * 6000000U);
 }
 
-static uint32_t vhf_channel_frequency(unsigned int channel) {
+static uint32_t high_vhf_channel_frequency(unsigned int channel) {
     return 177142857U + ((channel - 7U) * 6000000U);
 }
 
-static uint32_t br_channel_frequency(unsigned int channel) {
-    if (channel >= 7 && channel <= 13) {
-        return vhf_channel_frequency(channel);
+static uint32_t low_vhf_channel_frequency(unsigned int channel) {
+    if (channel >= 2 && channel <= 4) {
+        return 57142857U + ((channel - 2U) * 6000000U);
     }
-    if (channel >= 14 && channel <= 51) {
+    if (channel == 5) {
+        return 79142857U;
+    }
+    if (channel == 6) {
+        return 85142857U;
+    }
+    return 0;
+}
+
+static uint32_t br_channel_frequency(unsigned int channel) {
+    if (channel == 1) {
+        return 47142857U;
+    }
+    if (channel >= 2 && channel <= 6) {
+        return low_vhf_channel_frequency(channel);
+    }
+    if (channel >= 7 && channel <= 13) {
+        return high_vhf_channel_frequency(channel);
+    }
+    if (channel >= 14 && channel <= BR_SCAN_EXTENDED_MAX_CHANNEL) {
         return uhf_channel_frequency(channel);
     }
     return 0;
+}
+
+static const char *br_channel_band(unsigned int channel) {
+    if (channel == 1) {
+        return "VHF-I legado";
+    }
+    if (channel >= 2 && channel <= 6) {
+        return "VHF baixo";
+    }
+    if (channel >= 7 && channel <= 13) {
+        return "VHF alto";
+    }
+    if (channel >= 14 && channel <= 59) {
+        return "UHF";
+    }
+    if (channel >= 60 && channel <= 69) {
+        return "UHF estendido";
+    }
+    return "fora_plano";
+}
+
+static int channels_br_range_command(unsigned int max_channel, const char *command_name) {
+    printf("siano-tv %s\n", command_name);
+    printf("  sistema: ISDB-Tb Brasil\n");
+    printf("  canais: %u-%u%s\n",
+           BR_SCAN_MIN_CHANNEL,
+           max_channel,
+           max_channel > BR_SCAN_MAX_CHANNEL ? " (inclui UHF estendido historico)" : "");
+    for (unsigned int ch = BR_SCAN_MIN_CHANNEL; ch <= max_channel; ch++) {
+        uint32_t frequency = br_channel_frequency(ch);
+        if (!frequency) {
+            continue;
+        }
+        printf("  canal=%u faixa=%s freq=%u\n", ch, br_channel_band(ch), frequency);
+    }
+    return 0;
+}
+
+static int channels_br_command(void) {
+    return channels_br_range_command(BR_SCAN_MAX_CHANNEL, "channels-br");
+}
+
+static int channels_br_extended_command(void) {
+    return channels_br_range_command(BR_SCAN_EXTENDED_MAX_CHANNEL, "channels-br-extended");
 }
 
 static const char *segment_name(uint32_t segment_width) {
@@ -722,8 +789,8 @@ static int scan_one(smsusb_device_t *device, unsigned int channel, uint32_t freq
 
 static int diag_br_command(int argc, char **argv) {
     unsigned long channel = 0;
-    if (parse_ulong_arg(argv[2], 7, 51, &channel) != 0) {
-        fprintf(stderr, "diag-br failed: canal fisico deve estar entre 7 e 51\n");
+    if (parse_ulong_arg(argv[2], BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
+        fprintf(stderr, "diag-br failed: canal fisico deve estar entre 1 e 69\n");
         return 2;
     }
 
@@ -740,7 +807,7 @@ static int diag_br_command(int argc, char **argv) {
 
     uint32_t center_frequency = br_channel_frequency((unsigned int)channel);
     if (!center_frequency) {
-        fprintf(stderr, "diag-br failed: canal fisico deve estar entre 7-13 ou 14-51\n");
+        fprintf(stderr, "diag-br failed: canal fisico fora da canalizacao conhecida\n");
         return 2;
     }
 
@@ -794,6 +861,7 @@ static int diag_br_command(int argc, char **argv) {
     printf("  sistema: ISDB-Tb Brasil\n");
     printf("  init mode: %s\n", device_mode_name(selected_isdbt_mode()));
     printf("  canal: %lu\n", channel);
+    printf("  faixa: %s\n", br_channel_band((unsigned int)channel));
     printf("  centro: %u Hz\n", center_frequency);
     printf("  seconds_per_trial: %lu\n", seconds_per_trial);
     printf("  csv: %s\n", csv_path);
@@ -939,14 +1007,18 @@ static int scan_isdbt_command(void) {
     const uint32_t modes[] = {SMS_BW_ISDBT_13SEG, SMS_BW_ISDBT_1SEG, SMS_BW_ISDBT_3SEG};
     int locks = 0;
     printf("siano-tv scan-isdbt\n");
-    printf("  VHF 7-13\n");
-    for (unsigned int ch = 7; ch <= 13; ch++) {
+    printf("  VHF 1-13\n");
+    for (unsigned int ch = BR_SCAN_MIN_CHANNEL; ch <= 13; ch++) {
+        uint32_t frequency = br_channel_frequency(ch);
+        if (!frequency) {
+            continue;
+        }
         for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
-            locks += scan_one(&device, ch, vhf_channel_frequency(ch), modes[i]);
+            locks += scan_one(&device, ch, frequency, modes[i]);
         }
     }
-    printf("  UHF 14-51\n");
-    for (unsigned int ch = 14; ch <= 51; ch++) {
+    printf("  UHF 14-59\n");
+    for (unsigned int ch = 14; ch <= BR_SCAN_MAX_CHANNEL; ch++) {
         for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
             locks += scan_one(&device, ch, uhf_channel_frequency(ch), modes[i]);
         }
@@ -957,27 +1029,31 @@ static int scan_isdbt_command(void) {
     return locks > 0 ? 0 : 1;
 }
 
-static int scan_br_command(void) {
+static int scan_br_range_command(unsigned int max_channel, const char *command_name) {
     smsusb_device_t device;
     char error[256];
     int rc = smsusb_open(&device, error, sizeof(error));
     if (rc != 0) {
-        fprintf(stderr, "scan-br failed: %s\n", error);
+        fprintf(stderr, "%s failed: %s\n", command_name, error);
         return 1;
     }
 
     rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
-        fprintf(stderr, "scan-br failed: %s\n", error);
+        fprintf(stderr, "%s failed: %s\n", command_name, error);
         return 1;
     }
 
     int demod_locks = 0;
     int rf_locks = 0;
-    printf("siano-tv scan-br\n");
+    printf("siano-tv %s\n", command_name);
     printf("  sistema: ISDB-Tb Brasil, 6 MHz, full-seg principal\n");
-    for (unsigned int ch = 7; ch <= 51; ch++) {
+    printf("  canais: %u-%u%s\n",
+           BR_SCAN_MIN_CHANNEL,
+           max_channel,
+           max_channel > BR_SCAN_MAX_CHANNEL ? " (inclui UHF estendido historico)" : "");
+    for (unsigned int ch = BR_SCAN_MIN_CHANNEL; ch <= max_channel; ch++) {
         uint32_t frequency = br_channel_frequency(ch);
         if (!frequency) {
             continue;
@@ -986,7 +1062,7 @@ static int scan_br_command(void) {
         char local_error[256];
         rc = smsusb_tune_isdbt_segment(&device, frequency, SMS_BW_ISDBT_13SEG, local_error, sizeof(local_error));
         if (rc != 0) {
-            printf("  canal=%u freq=%u tune_error=%s\n", ch, frequency, local_error);
+            printf("  canal=%u faixa=%s freq=%u tune_error=%s\n", ch, br_channel_band(ch), frequency, local_error);
             continue;
         }
 
@@ -994,7 +1070,7 @@ static int scan_br_command(void) {
         sms_isdbt_stats_summary_t stats;
         rc = smsusb_get_isdbt_stats(&device, &stats, local_error, sizeof(local_error));
         if (rc != 0) {
-            printf("  canal=%u freq=%u stats_error=%s\n", ch, frequency, local_error);
+            printf("  canal=%u faixa=%s freq=%u stats_error=%s\n", ch, br_channel_band(ch), frequency, local_error);
             continue;
         }
 
@@ -1005,8 +1081,9 @@ static int scan_br_command(void) {
             demod_locks++;
         }
 
-        printf("  canal=%u freq=%u rf=%u demod=%u snr=%d power=%d status=%s\n",
+        printf("  canal=%u faixa=%s freq=%u rf=%u demod=%u snr=%d power=%d status=%s\n",
                ch,
+               br_channel_band(ch),
                frequency,
                stats.is_rf_locked,
                stats.is_demod_locked,
@@ -1019,6 +1096,14 @@ static int scan_br_command(void) {
     printf("  rf locks: %d\n", rf_locks);
     printf("  demod locks: %d\n", demod_locks);
     return demod_locks > 0 ? 0 : 1;
+}
+
+static int scan_br_command(void) {
+    return scan_br_range_command(BR_SCAN_MAX_CHANNEL, "scan-br");
+}
+
+static int scan_br_extended_command(void) {
+    return scan_br_range_command(BR_SCAN_EXTENDED_MAX_CHANNEL, "scan-br-extended");
 }
 
 static int maybe_launch_ffplay(const char *out_path) {
@@ -1159,8 +1244,8 @@ static int watch_isdbt_command(const char *frequency_text, const char *seconds_t
 
 static int watch_br_command(int argc, char **argv) {
     unsigned long channel = 0;
-    if (parse_ulong_arg(argv[2], 7, 51, &channel) != 0) {
-        fprintf(stderr, "watch-br failed: canal fisico deve estar entre 7 e 51\n");
+    if (parse_ulong_arg(argv[2], BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
+        fprintf(stderr, "watch-br failed: canal fisico deve estar entre 1 e 69\n");
         return 2;
     }
 
@@ -1176,7 +1261,7 @@ static int watch_br_command(int argc, char **argv) {
     const char *out_path = argc >= 5 ? argv[4] : default_path;
     uint32_t frequency = br_channel_frequency((unsigned int)channel);
     if (!frequency) {
-        fprintf(stderr, "watch-br failed: canal fisico deve estar entre 7-13 ou 14-51\n");
+        fprintf(stderr, "watch-br failed: canal fisico fora da canalizacao conhecida\n");
         return 2;
     }
 
@@ -1204,8 +1289,17 @@ int main(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "scan-isdbt") == 0) {
         return scan_isdbt_command();
     }
+    if (argc == 2 && strcmp(argv[1], "channels-br") == 0) {
+        return channels_br_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "channels-br-extended") == 0) {
+        return channels_br_extended_command();
+    }
     if (argc == 2 && strcmp(argv[1], "scan-br") == 0) {
         return scan_br_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "scan-br-extended") == 0) {
+        return scan_br_extended_command();
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "diag-br") == 0) {
         return diag_br_command(argc, argv);

@@ -17,8 +17,9 @@ fi
 SCAN_LOG="$CAPTURE_DIR/reception-scan-$(date +%Y%m%d-%H%M%S).txt"
 ./build/siano-tv scan-isdbt | tee "$SCAN_LOG" || true
 
-# Sao Paulo common UHF candidates plus channel 14 baseline.
-FREQUENCIES="527142857 533142857 557142857 581142857 473142857"
+# Brazilian physical-channel candidates. Start with VHF/low UHF coverage,
+# then common Sao Paulo UHF candidates.
+FREQUENCIES="47142857 57142857 85142857 177142857 213142857 473142857 527142857 533142857 557142857 581142857"
 
 for freq in $FREQUENCIES; do
     out="$CAPTURE_DIR/reception-$freq.ts"
@@ -46,4 +47,3 @@ done
 echo "No MPEG-TS data captured. Check antenna placement/cable and rerun:"
 echo "  $ROOT_DIR/tools/reception-test.sh"
 exit 1
-
