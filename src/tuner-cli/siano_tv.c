@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|scan-br|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|scan-br|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 static int probe_command(void) {
@@ -133,9 +133,12 @@ static const char *find_isdbt_firmware(void) {
     }
 
     const char *paths[] = {
+        "firmware/isdbt_nova_12mhz_b0_official_2010.inp",
         "firmware/isdbt_nova_12mhz_b0.inp",
+        "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0_official_2010.inp",
         "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp",
         "/usr/local/share/siano-tv/firmware/isdbt_nova_12mhz_b0.inp",
+        "/Users/lferrarezi/Downloads/Infinito PenTV/Mini_PENTV_USB/Linux/isdbt_nova_12mhz_b0.inp",
     };
 
     for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
@@ -586,6 +589,48 @@ static const char *segment_name(uint32_t segment_width) {
     }
 }
 
+static int stats_score(const sms_isdbt_stats_summary_t *stats) {
+    int score = 0;
+    if (stats->is_rf_locked) {
+        score += 1000;
+    }
+    if (stats->is_demod_locked) {
+        score += 100000;
+    }
+    if (stats->modem_state > 0 && stats->modem_state < 1000) {
+        score += (int)stats->modem_state * 100;
+    }
+    if (stats->snr > 0 && stats->snr < 1000) {
+        score += stats->snr * 10;
+    }
+    if (stats->in_band_power < 0 && stats->in_band_power > -120) {
+        score += 120 + stats->in_band_power;
+    }
+    int carrier_offset = stats->carrier_offset < 0 ? -stats->carrier_offset : stats->carrier_offset;
+    if (carrier_offset > 0 && carrier_offset < 1000000) {
+        score += 1000000 - carrier_offset;
+    }
+    return score;
+}
+
+static void diag_write_error_row(
+    FILE *csv,
+    unsigned long channel,
+    uint32_t center_frequency,
+    uint32_t frequency,
+    int offset,
+    const char *mode,
+    int score
+) {
+    fprintf(csv, "%lu,%u,%u,%d,%s,,,,,,,,,,,,%d\n",
+            channel,
+            center_frequency,
+            frequency,
+            offset,
+            mode,
+            score);
+}
+
 static int scan_one(smsusb_device_t *device, unsigned int channel, uint32_t frequency, uint32_t segment_width) {
     char error[256];
     int rc = smsusb_tune_isdbt_segment(device, frequency, segment_width, error, sizeof(error));
@@ -628,6 +673,204 @@ static int scan_one(smsusb_device_t *device, unsigned int channel, uint32_t freq
            stats.num_layers);
 
     return stats.is_demod_locked ? 1 : 0;
+}
+
+static int diag_br_command(int argc, char **argv) {
+    unsigned long channel = 0;
+    if (parse_ulong_arg(argv[2], 7, 51, &channel) != 0) {
+        fprintf(stderr, "diag-br failed: canal fisico deve estar entre 7 e 51\n");
+        return 2;
+    }
+
+    unsigned long seconds_per_trial = 2;
+    if (argc >= 4 && parse_ulong_arg(argv[3], 1, 15, &seconds_per_trial) != 0) {
+        fprintf(stderr, "diag-br failed: seconds_per_trial deve estar entre 1 e 15\n");
+        return 2;
+    }
+
+    mkdir("captures", 0755);
+    char default_csv[256];
+    snprintf(default_csv, sizeof(default_csv), "captures/diag-br-canal-%lu.csv", channel);
+    const char *csv_path = argc >= 5 ? argv[4] : default_csv;
+
+    uint32_t center_frequency = br_channel_frequency((unsigned int)channel);
+    if (!center_frequency) {
+        fprintf(stderr, "diag-br failed: canal fisico deve estar entre 7-13 ou 14-51\n");
+        return 2;
+    }
+
+    FILE *csv = fopen(csv_path, "w");
+    if (!csv) {
+        fprintf(stderr, "diag-br failed: could not open %s\n", csv_path);
+        return 1;
+    }
+    fprintf(csv, "channel,center_hz,frequency_hz,offset_hz,mode,rf,demod,modem,snr,rssi,power,carrier_offset,bandwidth,transmission_mode,guard,layers,score\n");
+
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fclose(csv);
+        fprintf(stderr, "diag-br failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fclose(csv);
+        fprintf(stderr, "diag-br failed: %s\n", error);
+        return 1;
+    }
+
+    const int offsets[] = {
+        0,
+        -250000, 250000,
+        -125000, 125000,
+        -375000, 375000,
+        -500000, 500000,
+        -625000, 625000,
+        -750000, 750000
+    };
+    const uint32_t modes[] = {
+        SMS_BW_ISDBT_1SEG,
+        SMS_BW_ISDBT_13SEG,
+        SMS_BW_ISDBT_3SEG
+    };
+
+    int best_score = -2147483647;
+    unsigned int best_frequency = 0;
+    int best_offset = 0;
+    uint32_t best_mode = 0;
+    sms_isdbt_stats_summary_t best_stats;
+    memset(&best_stats, 0, sizeof(best_stats));
+
+    printf("siano-tv diag-br\n");
+    printf("  sistema: ISDB-Tb Brasil\n");
+    printf("  canal: %lu\n", channel);
+    printf("  centro: %u Hz\n", center_frequency);
+    printf("  seconds_per_trial: %lu\n", seconds_per_trial);
+    printf("  csv: %s\n", csv_path);
+
+    for (size_t mode_i = 0; mode_i < sizeof(modes) / sizeof(modes[0]); mode_i++) {
+        for (size_t offset_i = 0; offset_i < sizeof(offsets) / sizeof(offsets[0]); offset_i++) {
+            int offset = offsets[offset_i];
+            uint32_t frequency = (uint32_t)((int64_t)center_frequency + offset);
+            char local_error[256];
+            rc = smsusb_tune_isdbt_segment(&device, frequency, modes[mode_i], local_error, sizeof(local_error));
+            if (rc != 0) {
+                printf("  mode=%s offset=%d freq=%u tune_error=%s\n", segment_name(modes[mode_i]), offset, frequency, local_error);
+                diag_write_error_row(csv, channel, center_frequency, frequency, offset, segment_name(modes[mode_i]), -1);
+                if (strstr(local_error, "LIBUSB_ERROR_NO_DEVICE") != NULL) {
+                    smsusb_close(&device, error, sizeof(error));
+                    sleep(2);
+                    rc = smsusb_open(&device, error, sizeof(error));
+                    if (rc == 0) {
+                        rc = ensure_isdbt_ready(&device, error, sizeof(error));
+                    }
+                    if (rc != 0) {
+                        printf("  usb_reopen_failed=%s\n", error);
+                        break;
+                    }
+                    printf("  usb_reopened=1\n");
+                }
+                continue;
+            }
+
+            time_t end_time = time(NULL) + (time_t)seconds_per_trial;
+            sms_isdbt_stats_summary_t stats;
+            memset(&stats, 0, sizeof(stats));
+            int stats_ok = 0;
+            while (time(NULL) <= end_time) {
+                rc = smsusb_get_isdbt_stats(&device, &stats, local_error, sizeof(local_error));
+                if (rc == 0) {
+                    stats_ok = 1;
+                }
+                if (stats.is_demod_locked) {
+                    break;
+                }
+                usleep(250000);
+            }
+
+            if (!stats_ok) {
+                printf("  mode=%s offset=%d freq=%u stats_error=%s\n", segment_name(modes[mode_i]), offset, frequency, local_error);
+                diag_write_error_row(csv, channel, center_frequency, frequency, offset, segment_name(modes[mode_i]), -1);
+                if (strstr(local_error, "LIBUSB_ERROR_NO_DEVICE") != NULL) {
+                    smsusb_close(&device, error, sizeof(error));
+                    sleep(2);
+                    rc = smsusb_open(&device, error, sizeof(error));
+                    if (rc == 0) {
+                        rc = ensure_isdbt_ready(&device, error, sizeof(error));
+                    }
+                    if (rc != 0) {
+                        printf("  usb_reopen_failed=%s\n", error);
+                        break;
+                    }
+                    printf("  usb_reopened=1\n");
+                }
+                continue;
+            }
+
+            int score = stats_score(&stats);
+            fprintf(csv, "%lu,%u,%u,%d,%s,%u,%u,%u,%d,%d,%d,%d,%u,%u,%u,%u,%d\n",
+                    channel,
+                    center_frequency,
+                    frequency,
+                    offset,
+                    segment_name(modes[mode_i]),
+                    stats.is_rf_locked,
+                    stats.is_demod_locked,
+                    stats.modem_state,
+                    stats.snr,
+                    stats.rssi,
+                    stats.in_band_power,
+                    stats.carrier_offset,
+                    stats.bandwidth,
+                    stats.transmission_mode,
+                    stats.guard_interval,
+                    stats.num_layers,
+                    score);
+
+            if (score > best_score) {
+                best_score = score;
+                best_frequency = frequency;
+                best_offset = offset;
+                best_mode = modes[mode_i];
+                best_stats = stats;
+            }
+
+            printf("  mode=%s offset=%d freq=%u rf=%u demod=%u modem=%u snr=%d power=%d carrier=%d score=%d\n",
+                   segment_name(modes[mode_i]),
+                   offset,
+                   frequency,
+                   stats.is_rf_locked,
+                   stats.is_demod_locked,
+                   stats.modem_state,
+                   stats.snr,
+                   stats.in_band_power,
+                   stats.carrier_offset,
+                   score);
+            fflush(stdout);
+        }
+    }
+
+    smsusb_close(&device, error, sizeof(error));
+    fclose(csv);
+
+    printf("  best: mode=%s offset=%d freq=%u rf=%u demod=%u modem=%u snr=%d power=%d carrier=%d score=%d\n",
+           segment_name(best_mode),
+           best_offset,
+           best_frequency,
+           best_stats.is_rf_locked,
+           best_stats.is_demod_locked,
+           best_stats.modem_state,
+           best_stats.snr,
+           best_stats.in_band_power,
+           best_stats.carrier_offset,
+           best_score);
+    printf("  next: ./build/siano-tv watch-isdbt %u 300 captures/diag-best-%lu.ts\n", best_frequency, channel);
+
+    return best_stats.is_demod_locked ? 0 : 1;
 }
 
 static int scan_isdbt_command(void) {
@@ -913,6 +1156,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && strcmp(argv[1], "scan-br") == 0) {
         return scan_br_command();
+    }
+    if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "diag-br") == 0) {
+        return diag_br_command(argc, argv);
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
         return watch_br_command(argc, argv);

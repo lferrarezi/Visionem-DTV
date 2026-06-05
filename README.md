@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.1.0`.
+Versao local: `1.2.0`.
 
 ## Estado Atual
 
@@ -54,12 +54,25 @@ Para um teste manual em tempo real enquanto ajusta a antena:
 
 ```sh
 ./build/siano-tv scan-br
+./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
 ./build/siano-tv watch-br 23 300 captures/canal-23.ts
 ```
 
 O comando imprime lock/estatisticas a cada segundo, grava MPEG-TS se aparecer, e tenta abrir `ffplay` automaticamente quando receber bytes.
 
 O dispositivo informado nao aceita antena externa. Para teste real, mova o dongle inteiro para perto de janela ou area aberta e rode `watch-br` no canal fisico mais promissor do `scan-br`.
+
+Se `scan-br` ficar em `rf=1 demod=0`, rode `diag-br`. Ele testa offsets finos ao redor do centro do canal e variantes `1seg`, `13seg` e `3seg`, grava CSV e imprime a melhor combinacao para um teste `watch-isdbt`.
+
+## Firmware Oficial Linux Antigo
+
+A referencia oficial Linux antiga pode trazer um firmware ISDB-T diferente do `linux-firmware` moderno. Para importar o arquivo local baixado:
+
+```sh
+./tools/import-official-linux-firmware.sh
+```
+
+Isso cria `firmware/isdbt_nova_12mhz_b0_official_2010.inp`, que passa a ser priorizado pelo CLI e pelo instalador. O blob continua fora do git.
 
 ## Instalador Grafico
 
@@ -72,7 +85,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.1.0-macos-installer.pkg
+dist/siano-tv-1.2.0-macos-installer.pkg
 ```
 
 O instalador coloca:
