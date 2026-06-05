@@ -3,11 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|scan-isdbt|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-load <path>|init-isdbt|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|scan-br|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 static int probe_command(void) {
@@ -116,6 +117,69 @@ static unsigned char *read_file(const char *path, size_t *size_out) {
     return buffer;
 }
 
+static const char *find_isdbt_firmware(void) {
+    static char home_path[512];
+    const char *home = getenv("HOME");
+    if (home) {
+        int written = snprintf(
+            home_path,
+            sizeof(home_path),
+            "%s/.local/share/siano-tv/firmware/isdbt_nova_12mhz_b0.inp",
+            home
+        );
+        if (written > 0 && (size_t)written < sizeof(home_path) && access(home_path, R_OK) == 0) {
+            return home_path;
+        }
+    }
+
+    const char *paths[] = {
+        "firmware/isdbt_nova_12mhz_b0.inp",
+        "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp",
+        "/usr/local/share/siano-tv/firmware/isdbt_nova_12mhz_b0.inp",
+    };
+
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        if (access(paths[i], R_OK) == 0) {
+            return paths[i];
+        }
+    }
+
+    return NULL;
+}
+
+static int ensure_isdbt_ready(smsusb_device_t *device, char *error, unsigned long error_len) {
+    sms_version_res_t version;
+    int rc = smsusb_get_version(device, &version, 3000, error, error_len);
+    if (rc != 0) {
+        return -1;
+    }
+
+    if (version.firmware_id == 255) {
+        const char *firmware_path = find_isdbt_firmware();
+        if (!firmware_path) {
+            snprintf(error, error_len, "ISDB-T firmware not found");
+            return -1;
+        }
+
+        size_t firmware_size = 0;
+        unsigned char *firmware = read_file(firmware_path, &firmware_size);
+        if (!firmware) {
+            snprintf(error, error_len, "could not read firmware %s", firmware_path);
+            return -1;
+        }
+
+        rc = smsusb_load_firmware(device, firmware, firmware_size, error, error_len);
+        free(firmware);
+        if (rc != 0) {
+            return -1;
+        }
+
+        sleep(1);
+    }
+
+    return smsusb_init_isdbt(device, error, error_len);
+}
+
 static int firmware_load_command(const char *path) {
     size_t firmware_size = 0;
     unsigned char *firmware = read_file(path, &firmware_size);
@@ -174,14 +238,14 @@ static int tune_isdbt_command(const char *frequency_text) {
         return 1;
     }
 
-    rc = smsusb_init_isdbt(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
         fprintf(stderr, "tune-isdbt failed: %s\n", error);
         return 1;
     }
 
-    rc = smsusb_tune_isdbt(&device, (uint32_t)frequency, error, sizeof(error));
+    rc = smsusb_tune_isdbt_segment(&device, (uint32_t)frequency, SMS_BW_ISDBT_13SEG, error, sizeof(error));
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
         fprintf(stderr, "tune-isdbt failed: %s\n", error);
@@ -210,7 +274,7 @@ static int init_isdbt_command(void) {
         return 1;
     }
 
-    rc = smsusb_init_isdbt(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
         fprintf(stderr, "init-isdbt failed: %s\n", error);
@@ -267,7 +331,7 @@ static int capture_isdbt_command(const char *frequency_text, const char *seconds
         return 1;
     }
 
-    rc = smsusb_init_isdbt(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
         fclose(out);
@@ -385,7 +449,7 @@ static int debug_read_command(const char *frequency_text, const char *seconds_te
         return 1;
     }
 
-    rc = smsusb_init_isdbt(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc == 0) {
         rc = smsusb_tune_isdbt(&device, (uint32_t)frequency, error, sizeof(error));
     }
@@ -454,7 +518,7 @@ static int stats_isdbt_command(const char *frequency_text) {
         return 1;
     }
 
-    rc = smsusb_init_isdbt(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc == 0) {
         rc = smsusb_tune_isdbt(&device, (uint32_t)frequency, error, sizeof(error));
     }
@@ -497,6 +561,16 @@ static uint32_t uhf_channel_frequency(unsigned int channel) {
 
 static uint32_t vhf_channel_frequency(unsigned int channel) {
     return 177142857U + ((channel - 7U) * 6000000U);
+}
+
+static uint32_t br_channel_frequency(unsigned int channel) {
+    if (channel >= 7 && channel <= 13) {
+        return vhf_channel_frequency(channel);
+    }
+    if (channel >= 14 && channel <= 51) {
+        return uhf_channel_frequency(channel);
+    }
+    return 0;
 }
 
 static const char *segment_name(uint32_t segment_width) {
@@ -565,7 +639,7 @@ static int scan_isdbt_command(void) {
         return 1;
     }
 
-    rc = smsusb_init_isdbt(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc != 0) {
         smsusb_close(&device, error, sizeof(error));
         fprintf(stderr, "scan-isdbt failed: %s\n", error);
@@ -593,6 +667,70 @@ static int scan_isdbt_command(void) {
     return locks > 0 ? 0 : 1;
 }
 
+static int scan_br_command(void) {
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "scan-br failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "scan-br failed: %s\n", error);
+        return 1;
+    }
+
+    int demod_locks = 0;
+    int rf_locks = 0;
+    printf("siano-tv scan-br\n");
+    printf("  sistema: ISDB-Tb Brasil, 6 MHz, full-seg principal\n");
+    for (unsigned int ch = 7; ch <= 51; ch++) {
+        uint32_t frequency = br_channel_frequency(ch);
+        if (!frequency) {
+            continue;
+        }
+
+        char local_error[256];
+        rc = smsusb_tune_isdbt_segment(&device, frequency, SMS_BW_ISDBT_13SEG, local_error, sizeof(local_error));
+        if (rc != 0) {
+            printf("  canal=%u freq=%u tune_error=%s\n", ch, frequency, local_error);
+            continue;
+        }
+
+        sleep(1);
+        sms_isdbt_stats_summary_t stats;
+        rc = smsusb_get_isdbt_stats(&device, &stats, local_error, sizeof(local_error));
+        if (rc != 0) {
+            printf("  canal=%u freq=%u stats_error=%s\n", ch, frequency, local_error);
+            continue;
+        }
+
+        if (stats.is_rf_locked) {
+            rf_locks++;
+        }
+        if (stats.is_demod_locked) {
+            demod_locks++;
+        }
+
+        printf("  canal=%u freq=%u rf=%u demod=%u snr=%d power=%d status=%s\n",
+               ch,
+               frequency,
+               stats.is_rf_locked,
+               stats.is_demod_locked,
+               stats.snr,
+               stats.in_band_power,
+               stats.is_demod_locked ? "pronto_para_imagem" : (stats.is_rf_locked ? "portadora_sem_demod" : "sem_lock"));
+    }
+
+    smsusb_close(&device, error, sizeof(error));
+    printf("  rf locks: %d\n", rf_locks);
+    printf("  demod locks: %d\n", demod_locks);
+    return demod_locks > 0 ? 0 : 1;
+}
+
 static int maybe_launch_ffplay(const char *out_path) {
     char command[1024];
     int written = snprintf(
@@ -608,15 +746,7 @@ static int maybe_launch_ffplay(const char *out_path) {
     return system(command);
 }
 
-static int watch_isdbt_command(const char *frequency_text, const char *seconds_text, const char *out_path) {
-    unsigned long frequency = 0;
-    unsigned long seconds = 0;
-    if (parse_ulong_arg(frequency_text, 1, 1000000000UL, &frequency) != 0 ||
-        parse_ulong_arg(seconds_text, 1, 3600, &seconds) != 0) {
-        fprintf(stderr, "watch-isdbt failed: invalid arguments\n");
-        return 2;
-    }
-
+static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds, const char *out_path) {
     FILE *out = fopen(out_path, "wb");
     if (!out) {
         fprintf(stderr, "watch-isdbt failed: could not open %s\n", out_path);
@@ -632,7 +762,7 @@ static int watch_isdbt_command(const char *frequency_text, const char *seconds_t
         return 1;
     }
 
-    rc = smsusb_init_isdbt(&device, error, sizeof(error));
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc == 0) {
         rc = smsusb_tune_isdbt_segment(&device, (uint32_t)frequency, SMS_BW_ISDBT_13SEG, error, sizeof(error));
     }
@@ -655,10 +785,11 @@ static int watch_isdbt_command(const char *frequency_text, const char *seconds_t
     }
 
     printf("siano-tv watch-isdbt\n");
+    printf("  sistema: ISDB-Tb Brasil full-seg\n");
     printf("  frequency: %lu Hz\n", frequency);
     printf("  duration: %lu seconds\n", seconds);
     printf("  output: %s\n", out_path);
-    printf("  move the antenna now; waiting for lock/TS...\n");
+    printf("  ajuste a posicao do dongle; aguardando demod/TS...\n");
     fflush(stdout);
 
     unsigned char ts_buffer[8192];
@@ -693,7 +824,7 @@ static int watch_isdbt_command(const char *frequency_text, const char *seconds_t
             sms_isdbt_stats_summary_t stats;
             int stats_rc = smsusb_get_isdbt_stats(&device, &stats, error, sizeof(error));
             if (stats_rc == 0) {
-                printf("  t=%lds rf=%u demod=%u modem=%u snr=%d rssi=%d power=%d layers=%u bytes=%lu\n",
+                printf("  t=%lds rf=%u demod=%u modem=%u snr=%d rssi=%d power=%d layers=%u bytes=%lu status=%s\n",
                        (long)(now - start),
                        stats.is_rf_locked,
                        stats.is_demod_locked,
@@ -702,7 +833,8 @@ static int watch_isdbt_command(const char *frequency_text, const char *seconds_t
                        stats.rssi,
                        stats.in_band_power,
                        stats.num_layers,
-                       (unsigned long)total);
+                       (unsigned long)total,
+                       stats.is_demod_locked ? "imagem_possivel" : (stats.is_rf_locked ? "melhorar_posicao" : "sem_portadora"));
             } else {
                 printf("  t=%lds stats_error=%s bytes=%lu\n", (long)(now - start), error, (unsigned long)total);
             }
@@ -723,6 +855,44 @@ static int watch_isdbt_command(const char *frequency_text, const char *seconds_t
     return total > 0 ? 0 : 1;
 }
 
+static int watch_isdbt_command(const char *frequency_text, const char *seconds_text, const char *out_path) {
+    unsigned long frequency = 0;
+    unsigned long seconds = 0;
+    if (parse_ulong_arg(frequency_text, 1, 1000000000UL, &frequency) != 0 ||
+        parse_ulong_arg(seconds_text, 1, 3600, &seconds) != 0) {
+        fprintf(stderr, "watch-isdbt failed: invalid arguments\n");
+        return 2;
+    }
+
+    return watch_isdbt_frequency(frequency, seconds, out_path);
+}
+
+static int watch_br_command(int argc, char **argv) {
+    unsigned long channel = 0;
+    if (parse_ulong_arg(argv[2], 7, 51, &channel) != 0) {
+        fprintf(stderr, "watch-br failed: canal fisico deve estar entre 7 e 51\n");
+        return 2;
+    }
+
+    unsigned long seconds = 300;
+    if (argc >= 4 && parse_ulong_arg(argv[3], 1, 3600, &seconds) != 0) {
+        fprintf(stderr, "watch-br failed: seconds invalido\n");
+        return 2;
+    }
+
+    char default_path[256];
+    mkdir("captures", 0755);
+    snprintf(default_path, sizeof(default_path), "captures/br-canal-%lu.ts", channel);
+    const char *out_path = argc >= 5 ? argv[4] : default_path;
+    uint32_t frequency = br_channel_frequency((unsigned int)channel);
+    if (!frequency) {
+        fprintf(stderr, "watch-br failed: canal fisico deve estar entre 7-13 ou 14-51\n");
+        return 2;
+    }
+
+    return watch_isdbt_frequency(frequency, seconds, out_path);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -740,6 +910,12 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && strcmp(argv[1], "scan-isdbt") == 0) {
         return scan_isdbt_command();
+    }
+    if (argc == 2 && strcmp(argv[1], "scan-br") == 0) {
+        return scan_br_command();
+    }
+    if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
+        return watch_br_command(argc, argv);
     }
     if (argc == 3 && strcmp(argv[1], "firmware-load") == 0) {
         return firmware_load_command(argv[2]);

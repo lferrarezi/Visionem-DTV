@@ -22,9 +22,6 @@ cp tools/install-local.sh tools/fetch-siano-firmware.sh "$PKG_DIR/tools/"
 if [ -f firmware/isdbt_nova_12mhz_b0.inp ]; then
     cp firmware/isdbt_nova_12mhz_b0.inp "$PKG_DIR/firmware/"
 fi
-if [ -f firmware/dvb_nova_12mhz_b0.inp ]; then
-    cp firmware/dvb_nova_12mhz_b0.inp "$PKG_DIR/firmware/"
-fi
 
 tar -C "$DIST_DIR" -czf "$DIST_DIR/siano-tv-$VERSION-macos-arm64.tar.gz" "siano-tv-$VERSION"
 shasum -a 256 "$DIST_DIR/siano-tv-$VERSION-macos-arm64.tar.gz"

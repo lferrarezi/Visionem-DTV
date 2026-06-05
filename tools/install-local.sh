@@ -31,4 +31,5 @@ echo "  $PREFIX/share/siano-tv/firmware"
 echo
 echo "Try:"
 echo "  $PREFIX/bin/siano-tv version"
-echo "  $PREFIX/bin/siano-tv watch-isdbt 527142857 120 captures/watch.ts"
+echo "  $PREFIX/bin/siano-tv scan-br"
+echo "  $PREFIX/bin/siano-tv watch-br 23 300 captures/canal-23.ts"
