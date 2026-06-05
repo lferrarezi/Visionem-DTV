@@ -595,6 +595,65 @@ int smsusb_add_pid_filter_route(smsusb_device_t *device, uint32_t pid, uint8_t s
     return 0;
 }
 
+int smsusb_get_pid_filter_list(smsusb_device_t *device, uint32_t *pids, size_t max_pids, size_t *count_out, char *error, unsigned long error_len) {
+    if (!device || !device->handle || !pids || !count_out) {
+        set_error(error, error_len, "invalid get_pid_filter_list arguments");
+        return -1;
+    }
+
+    *count_out = 0;
+    sms_msg_hdr_t request;
+    sms_msg_init_ex(
+        &request,
+        SMS_MSG_GET_PID_FILTER_LIST_REQ,
+        SMS_DVBT_BDA_CONTROL_MSG_ID,
+        SMS_HIF_TASK,
+        sizeof(request)
+    );
+
+    unsigned char response[SMSUSB_LARGE_MESSAGE_SIZE];
+    int rc = smsusb_send_and_wait(
+        device,
+        &request,
+        sizeof(request),
+        SMS_MSG_GET_PID_FILTER_LIST_RES,
+        3000,
+        response,
+        sizeof(response),
+        error,
+        error_len
+    );
+    if (rc < 0) {
+        return -1;
+    }
+
+    sms_msg_hdr_t *header = (sms_msg_hdr_t *)response;
+    if (header->msg_length < sizeof(sms_msg_hdr_t)) {
+        snprintf(error, error_len, "PID filter list response too short: %u", header->msg_length);
+        return -1;
+    }
+
+    size_t payload_len = header->msg_length - sizeof(sms_msg_hdr_t);
+    size_t words = payload_len / sizeof(uint32_t);
+    uint32_t *data = (uint32_t *)(response + sizeof(sms_msg_hdr_t));
+
+    size_t count = words;
+    if (words > 0 && data[0] <= words - 1) {
+        count = data[0];
+        data++;
+    }
+    if (count > max_pids) {
+        count = max_pids;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        pids[i] = data[i];
+    }
+    *count_out = count;
+    set_error(error, error_len, "");
+    return 0;
+}
+
 int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len) {
     if (!device || !device->handle || !buffer || !size_out) {
         set_error(error, error_len, "invalid read_ts_packet arguments");

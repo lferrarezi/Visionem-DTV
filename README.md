@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.6.2`.
+Versao local: `1.6.3`.
 
 ## Estado Atual
 
@@ -58,6 +58,7 @@ Para um teste manual em tempo real enquanto ajusta a antena:
 ./build/siano-tv scan-br-extended
 ./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
 ./build/siano-tv debug-channel-br 23 5
+./build/siano-tv pid-list-br 23
 ./build/siano-tv stats-isdbt-ex 527142857
 ./build/siano-tv watch-br 23 300 captures/canal-23.ts
 ```
@@ -71,6 +72,8 @@ Se `scan-br` ficar em `rf=1 demod=0`, rode `diag-br` e depois `debug-channel-br`
 O `watch-br` aplica o MTU `15792` observado no driver Linux oficial para placas ONDA/MDTV, imprime contadores USB (`non_ts` e `timeouts`) e aceita rotas de filtro PID para diagnostico: `SIANO_TV_PID_SRC=<id>` e `SIANO_TV_PID_DST=<id>`. As preparacoes experimentais `1seg-through-fullseg` e `vhf-via-vhf-input` podem ser testadas com `prepare-reception` ou ativadas no fluxo normal com `SIANO_TV_EXPERIMENTAL_PREP=1`.
 
 Para comparar firmwares sem editar arquivos, use `SIANO_TV_FIRMWARE=/caminho/arquivo.inp`. O comando `firmware-path` mostra qual blob sera escolhido. A camada USB tambem normaliza mensagens splitadas como o driver Linux `smsusb` e limpa halt nos endpoints ao abrir o dispositivo.
+
+Para investigar a entrega de MPEG-TS, `pid-list-br <canal>` instala os filtros padrao e consulta a lista interna reportada pelo firmware. `SIANO_TV_PID_BEFORE_TUNE=1` instala os filtros antes da sintonia para testar a ordem alternativa do pipeline.
 
 ## Canalizacao Brasileira
 
@@ -117,7 +120,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.6.2-macos-installer.pkg
+dist/siano-tv-1.6.3-macos-installer.pkg
 ```
 
 O instalador coloca:

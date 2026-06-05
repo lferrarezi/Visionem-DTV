@@ -96,6 +96,10 @@ typedef struct sms_isdbt_stats_summary {
 #define SMS_MSG_INIT_DEVICE_RES 579
 #define SMS_MSG_ADD_PID_FILTER_REQ 601
 #define SMS_MSG_ADD_PID_FILTER_RES 602
+#define SMS_MSG_REMOVE_PID_FILTER_REQ 603
+#define SMS_MSG_REMOVE_PID_FILTER_RES 604
+#define SMS_MSG_GET_PID_FILTER_LIST_REQ 608
+#define SMS_MSG_GET_PID_FILTER_LIST_RES 609
 #define SMS_MSG_GET_STATISTICS_REQ 615
 #define SMS_MSG_GET_STATISTICS_RES 616
 #define SMS_MSG_HO_PER_SLICES_IND 630
@@ -141,6 +145,7 @@ int smsusb_tune_isdbt(smsusb_device_t *device, uint32_t frequency_hz, char *erro
 int smsusb_tune_isdbt_segment(smsusb_device_t *device, uint32_t frequency_hz, uint32_t segment_width, char *error, unsigned long error_len);
 int smsusb_add_pid_filter(smsusb_device_t *device, uint32_t pid, char *error, unsigned long error_len);
 int smsusb_add_pid_filter_route(smsusb_device_t *device, uint32_t pid, uint8_t src, uint8_t dst, char *error, unsigned long error_len);
+int smsusb_get_pid_filter_list(smsusb_device_t *device, uint32_t *pids, size_t max_pids, size_t *count_out, char *error, unsigned long error_len);
 int smsusb_read_ts_packet(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_read_message_header(smsusb_device_t *device, sms_msg_hdr_t *header_out, unsigned int timeout_ms, char *error, unsigned long error_len);
 int smsusb_read_raw_message(smsusb_device_t *device, unsigned char *buffer, size_t buffer_len, size_t *size_out, unsigned int timeout_ms, char *error, unsigned long error_len);

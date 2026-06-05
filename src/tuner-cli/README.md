@@ -28,6 +28,7 @@ Comandos esperados:
 ./build/siano-tv scan-br-extended
 ./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
 ./build/siano-tv debug-channel-br 23 5
+./build/siano-tv pid-list-br 23
 ./build/siano-tv stats-isdbt-ex 527142857
 SIANO_TV_MODE=isdbt-bda ./build/siano-tv scan-br
 ./build/siano-tv watch-isdbt 527142857 120 captures/watch.ts
@@ -50,6 +51,8 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 `debug-channel-br` faz uma leitura fina por canal brasileiro: testa `1seg`, `13seg` e `3seg`, imprime cada mensagem recebida do firmware, resume contagem por tipo, compara estatistica normal e expandida, e indica se algum payload MPEG-TS apareceu.
 
 `watch-br` configura MTU `15792`, imprime contadores de mensagens brutas e aceita `SIANO_TV_PID_SRC` / `SIANO_TV_PID_DST` para testar rotas alternativas de filtro PID.
+
+`pid-list-br` instala os filtros PID usados pelo `watch-br` e consulta `MSG_SMS_GET_PID_FILTER_LIST_REQ` para verificar se o firmware registrou os filtros.
 
 `SIANO_TV_FIRMWARE=/caminho/firmware.inp` força um firmware ISDB-T especifico. A leitura USB normaliza mensagens splitadas conforme a estrategia do driver Linux `smsusb`.
 

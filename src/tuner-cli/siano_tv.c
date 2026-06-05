@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -193,6 +193,11 @@ static uint8_t env_u8_or_default(const char *name, uint8_t fallback) {
         return fallback;
     }
     return (uint8_t)parsed;
+}
+
+static int env_flag_enabled(const char *name) {
+    const char *value = getenv(name);
+    return value && (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "yes") == 0);
 }
 
 static int ensure_isdbt_ready_mode(smsusb_device_t *device, uint32_t mode, char *error, unsigned long error_len) {
@@ -1414,6 +1419,36 @@ static int maybe_launch_ffplay(const char *out_path) {
     return system(command);
 }
 
+static int install_watch_pids(smsusb_device_t *device, char *error, unsigned long error_len) {
+    uint8_t pid_src = env_u8_or_default("SIANO_TV_PID_SRC", SMS_DVBT_BDA_CONTROL_MSG_ID);
+    uint8_t pid_dst = env_u8_or_default("SIANO_TV_PID_DST", SMS_HIF_TASK);
+    printf("  pid route: src=%u dst=%u\n", pid_src, pid_dst);
+    const uint32_t pids[] = {0x2000, 0x0000, 0x0010, 0x0011, 0x0012, 0x0014, 0x1fff};
+    for (size_t i = 0; i < sizeof(pids) / sizeof(pids[0]); i++) {
+        int rc = smsusb_add_pid_filter_route(device, pids[i], pid_src, pid_dst, error, error_len);
+        if (rc != 0) {
+            return -1;
+        }
+    }
+
+    uint32_t listed[32];
+    size_t listed_count = 0;
+    int rc = smsusb_get_pid_filter_list(device, listed, sizeof(listed) / sizeof(listed[0]), &listed_count, error, error_len);
+    if (rc == 0) {
+        printf("  pid list count=%lu", (unsigned long)listed_count);
+        for (size_t i = 0; i < listed_count; i++) {
+            printf(" 0x%04x", listed[i]);
+        }
+        printf("\n");
+    } else {
+        printf("  pid list unavailable: %s\n", error);
+        if (error && error_len > 0) {
+            error[0] = '\0';
+        }
+    }
+    return 0;
+}
+
 static int choose_watch_mode(smsusb_device_t *device, uint32_t frequency, uint32_t *mode_out, char *error, unsigned long error_len) {
     const uint32_t modes[] = {SMS_BW_ISDBT_1SEG, SMS_BW_ISDBT_13SEG, SMS_BW_ISDBT_3SEG};
     int best_score = -2147483647;
@@ -1493,6 +1528,12 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
     rc = ensure_isdbt_ready(&device, error, sizeof(error));
     if (rc == 0) {
         prepare_reception_experimental_if_enabled(&device);
+        if (env_flag_enabled("SIANO_TV_PID_BEFORE_TUNE")) {
+            printf("  instalando filtros PID antes do tune\n");
+            rc = install_watch_pids(&device, error, sizeof(error));
+        }
+    }
+    if (rc == 0) {
         rc = choose_watch_mode(&device, (uint32_t)frequency, &selected_mode, error, sizeof(error));
     }
     if (rc != 0) {
@@ -1523,12 +1564,8 @@ static int watch_isdbt_frequency(unsigned long frequency, unsigned long seconds,
         usleep(250000);
     }
 
-    uint8_t pid_src = env_u8_or_default("SIANO_TV_PID_SRC", SMS_DVBT_BDA_CONTROL_MSG_ID);
-    uint8_t pid_dst = env_u8_or_default("SIANO_TV_PID_DST", SMS_HIF_TASK);
-    printf("  pid route: src=%u dst=%u\n", pid_src, pid_dst);
-    const uint32_t pids[] = {0x2000, 0x0000, 0x0010, 0x0011, 0x0012, 0x0014, 0x1fff};
-    for (size_t i = 0; i < sizeof(pids) / sizeof(pids[0]); i++) {
-        rc = smsusb_add_pid_filter_route(&device, pids[i], pid_src, pid_dst, error, sizeof(error));
+    if (!env_flag_enabled("SIANO_TV_PID_BEFORE_TUNE")) {
+        rc = install_watch_pids(&device, error, sizeof(error));
         if (rc != 0) {
             smsusb_close(&device, error, sizeof(error));
             fclose(out);
@@ -1682,6 +1719,49 @@ static int watch_br_command(int argc, char **argv) {
     return watch_isdbt_frequency(frequency, seconds, out_path);
 }
 
+static int pid_list_br_command(const char *channel_text) {
+    unsigned long channel = 0;
+    if (parse_ulong_arg(channel_text, BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
+        fprintf(stderr, "pid-list-br failed: canal fisico deve estar entre 1 e 69\n");
+        return 2;
+    }
+
+    uint32_t frequency = br_channel_frequency((unsigned int)channel);
+    if (!frequency) {
+        fprintf(stderr, "pid-list-br failed: canal fisico fora da canalizacao conhecida\n");
+        return 2;
+    }
+
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "pid-list-br failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc == 0) {
+        rc = smsusb_tune_isdbt_segment(&device, frequency, SMS_BW_ISDBT_13SEG, error, sizeof(error));
+    }
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "pid-list-br failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv pid-list-br\n");
+    printf("  canal: %lu\n", channel);
+    printf("  frequency: %u Hz\n", frequency);
+    rc = install_watch_pids(&device, error, sizeof(error));
+    smsusb_close(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "pid-list-br failed: %s\n", error);
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -1726,6 +1806,9 @@ int main(int argc, char **argv) {
     }
     if ((argc == 3 || argc == 4) && strcmp(argv[1], "debug-channel-br") == 0) {
         return debug_channel_br_command(argc, argv);
+    }
+    if (argc == 3 && strcmp(argv[1], "pid-list-br") == 0) {
+        return pid_list_br_command(argv[2]);
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
         return watch_br_command(argc, argv);
