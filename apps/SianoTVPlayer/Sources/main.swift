@@ -259,7 +259,45 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
 
         fallbackDumpStarted = false
-        runWatchProcess(binary: binary, arguments: ["watch-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
+        if shouldStartWithDump(binary: binary) {
+            fallbackDumpStarted = true
+            runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
+        } else {
+            runWatchProcess(binary: binary, arguments: ["watch-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
+        }
+    }
+
+    private func shouldStartWithDump(binary: String) -> Bool {
+        let version = runShortCommand(binary: binary, arguments: ["version"])
+        if version.exitCode == 0 {
+            return false
+        }
+        let state = runShortCommand(binary: binary, arguments: ["usb-state"])
+        return state.output.contains("mdtv=1")
+    }
+
+    private func runShortCommand(binary: String, arguments: [String]) -> (exitCode: Int32, output: String) {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            let deadline = Date().addingTimeInterval(4)
+            while process.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                process.terminate()
+            }
+            process.waitUntilExit()
+        } catch {
+            return (1, error.localizedDescription)
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
     private func runWatchProcess(binary: String, arguments: [String], outputURL: URL, channel: TVChannel, isFallback: Bool) {
