@@ -24,9 +24,16 @@ struct TVChannel: Codable, Hashable, Sendable {
     }
 }
 
+struct TransmissionProbe: Sendable {
+    let name: String
+    let hasVideo: Bool
+    let bytes: Int
+}
+
+private let minimumPreviewBytes = 96 * 1024
+
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-    private static let minimumPreviewBytes = 96 * 1024
     private let window: NSWindow
     private let tableView = NSTableView()
     private let statusLabel = NSTextField(labelWithString: "Selecione um canal para assistir")
@@ -282,29 +289,25 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 let scanned = text
                     .split(separator: "\n")
                     .compactMap { parseScanLine(String($0)) }
-                    .filter { $0.rfLocked == true || $0.demodLocked == true }
-                let fallbackName = scanned.isEmpty ? Self.detectCurrentStreamName(binary: binary) : nil
+                    .filter { $0.demodLocked == true }
+                let currentTransmission = Self.detectCurrentTransmission(binary: binary)
                 DispatchQueue.main.async {
                     self.scanProcess = nil
-                    self.channels.removeAll { channel in
-                        channel.name == nil && channel.rfLocked != true && channel.demodLocked != true
-                    }
-                    let discovered = scanned.isEmpty ? Self.brazilianChannelCandidates(existing: self.channels) : scanned
-                    for channel in discovered {
+                    self.channels.removeAll()
+                    for channel in scanned where channel.name != nil && channel.name?.isEmpty == false {
                         self.applyScanResult(channel)
                     }
-                    if scanned.isEmpty, self.isMDTVPresent(binary: binary) {
-                        self.applyScanResult(Self.currentStreamPlaceholder(name: fallbackName ?? "Fluxo atual"))
+                    if let currentTransmission, currentTransmission.hasVideo {
+                        self.applyScanResult(Self.currentStreamPlaceholder(name: currentTransmission.name))
                     }
                     self.scanButton.isEnabled = true
                     self.persistChannels()
-                    self.statusLabel.stringValue = "Atualizacao concluida"
-                    let ready = self.channels.filter { $0.demodLocked == true }.count
-                    let carriers = self.channels.filter { $0.rfLocked == true }.count
-                    if scanned.isEmpty {
-                        self.detailLabel.stringValue = "Varredura de controle indisponivel; exibindo canais brasileiros candidatos"
+                    if self.channels.isEmpty {
+                        self.statusLabel.stringValue = "Nenhuma transmissao encontrada"
+                        self.detailLabel.stringValue = "A busca so lista canais com TS, video e nome de servico confirmados"
                     } else {
-                        self.detailLabel.stringValue = "\(ready) canais com demod, \(carriers) com portadora"
+                        self.statusLabel.stringValue = "Busca concluida"
+                        self.detailLabel.stringValue = "\(self.channels.count) transmissao encontrada"
                     }
                     self.autoStartCurrentStreamIfAvailable()
                 }
@@ -490,7 +493,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             Task { @MainActor in
                 guard let self else { return }
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                if size > Self.minimumPreviewBytes {
+                if size > minimumPreviewBytes {
                     self.updateChannelNameFromTransportStream(outputURL, channelNumber: channelNumber)
                     self.startFramePreview(outputURL)
                     self.statusLabel.stringValue = "Recebendo transmissao"
@@ -673,56 +676,6 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         )
     }
 
-    private static func brazilianChannelCandidates(existing: [TVChannel]) -> [TVChannel] {
-        (1...59).compactMap { number in
-            guard let frequency = brazilianFrequency(channel: number) else { return nil }
-            let previous = existing.first { $0.number == number }
-            return TVChannel(
-                number: number,
-                band: brazilianBand(channel: number),
-                frequency: frequency,
-                name: previous?.name,
-                rfLocked: previous?.rfLocked,
-                demodLocked: previous?.demodLocked,
-                scanStatus: "candidato"
-            )
-        }
-    }
-
-    private static func brazilianFrequency(channel: Int) -> Int? {
-        switch channel {
-        case 1:
-            return 47_142_857
-        case 2...4:
-            return 57_142_857 + (channel - 2) * 6_000_000
-        case 5:
-            return 79_142_857
-        case 6:
-            return 85_142_857
-        case 7...13:
-            return 177_142_857 + (channel - 7) * 6_000_000
-        case 14...59:
-            return 473_142_857 + (channel - 14) * 6_000_000
-        default:
-            return nil
-        }
-    }
-
-    private static func brazilianBand(channel: Int) -> String {
-        switch channel {
-        case 1:
-            return "VHF-I legado"
-        case 2...6:
-            return "VHF baixo"
-        case 7...13:
-            return "VHF alto"
-        case 14...59:
-            return "UHF"
-        default:
-            return "fora_plano"
-        }
-    }
-
     private func findSianoTVBinary() -> String? {
         let candidates = [
             "/usr/local/bin/siano-tv",
@@ -842,26 +795,63 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    nonisolated private static func detectCurrentStreamName(binary: String) -> String? {
+    nonisolated private static func detectCurrentTransmission(binary: String) -> TransmissionProbe? {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("siano-tv-current-stream-\(UUID().uuidString).ts")
         defer { try? FileManager.default.removeItem(at: outputURL) }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["dump-ts", "4", outputURL.path]
+        process.arguments = ["dump-ts", "8", outputURL.path]
         process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            return nil
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard size > minimumPreviewBytes,
+              let name = detectServiceName(in: outputURL) else { return nil }
+        return TransmissionProbe(name: name, hasVideo: hasVideoStream(in: outputURL), bytes: size)
+    }
+
+    nonisolated private static func hasVideoStream(in url: URL) -> Bool {
+        guard let ffprobe = findExecutable(["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]) else {
+            return false
+        }
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: ffprobe)
+        process.arguments = [
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            url.path
+        ]
+        process.standardOutput = pipe
         process.standardError = Pipe()
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
-            return nil
+            return false
         }
-        guard process.terminationStatus == 0 else { return nil }
-        let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        guard size > 188 * 20 else { return nil }
-        return detectServiceName(in: outputURL)
+        guard process.terminationStatus == 0 else { return false }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return output.split(separator: "\n").contains("video")
     }
 }
 

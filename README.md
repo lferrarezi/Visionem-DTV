@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.7.3`.
+Versao local: `1.7.4`.
 
 ## Estado Atual
 
@@ -123,7 +123,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-dtv-1.7.3-macos-installer.pkg
+dist/visionem-dtv-1.7.4-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -134,7 +134,7 @@ O instalador coloca:
 
 Antes de instalar a nova versao, o instalador remove instalacoes anteriores em `/Applications/Siano TV Digital.app`, `/Applications/Visionem.app`, `/Applications/Visionem DTV.app`, `/Library/Application Support/Siano TV Digital`, `/Library/Application Support/Visionem`, `/Library/Application Support/Visionem DTV` e `/usr/local/bin/siano-tv`.
 
-Depois de instalar, abra `Visionem DTV.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Na primeira execucao, o app comeca com a lista vazia e inicia uma varredura brasileira; depois passa a abrir com a ultima lista salva em `~/Library/Application Support/Visionem DTV/channels-br.json`. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware. Como o `AVPlayer` do macOS nao renderiza de forma confiavel o TS 1seg/AAC LATM recebido, o app usa `ffmpeg` para extrair frames continuamente e exibir a transmissao dentro da propria janela. Quando o TS contem metadados de servico, o app salva o nome do canal exibido na lista.
+Depois de instalar, abra `Visionem DTV.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Na primeira execucao, o app comeca com a lista vazia e inicia uma varredura brasileira; depois passa a abrir com a ultima lista salva em `~/Library/Application Support/Visionem DTV/channels-br.json`. Ao clicar em Atualizar, a lista e o cache sao zerados e a busca mostra somente transmissoes confirmadas com MPEG-TS, video e nome de servico. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se houver um fluxo TS ja aberto pelo firmware, ele entra como `Fluxo atual` apenas quando tambem tiver video e nome confirmados. Como o `AVPlayer` do macOS nao renderiza de forma confiavel o TS 1seg/AAC LATM recebido, o app usa `ffmpeg` para extrair frames continuamente e exibir a transmissao dentro da propria janela.
 
 Tambem e possivel rodar pelo Terminal:
 
