@@ -35,6 +35,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private let frameView = NSImageView()
     private let scanButton = NSButton(title: "Atualizar", target: nil, action: nil)
     private let stopButton = NSButton(title: "Parar", target: nil, action: nil)
+    private let pipButton = NSButton(title: "PIP", target: nil, action: nil)
+    private var pipWindow: NSPanel?
+    private let pipImageView = NSImageView()
     private var channels: [TVChannel] = []
     private var scanProcess: Process?
     private var watchProcess: Process?
@@ -74,6 +77,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         let videoPane = NSView()
         let sidebar = NSView()
+        videoPane.wantsLayer = true
+        videoPane.layer?.backgroundColor = NSColor.black.cgColor
+        sidebar.wantsLayer = true
+        sidebar.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         root.addArrangedSubview(videoPane)
         root.addArrangedSubview(sidebar)
 
@@ -114,18 +121,29 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         scanButton.action = #selector(refreshChannels)
         stopButton.target = self
         stopButton.action = #selector(stopWatching)
+        pipButton.target = self
+        pipButton.action = #selector(togglePIP)
+        [scanButton, stopButton, pipButton].forEach { button in
+            button.bezelStyle = .rounded
+            button.controlSize = .large
+        }
 
-        let controls = NSStackView(views: [scanButton, stopButton])
+        let controls = NSStackView(views: [scanButton, stopButton, pipButton])
         controls.orientation = .horizontal
         controls.distribution = .fillEqually
         controls.spacing = 8
         controls.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = NSTextField(labelWithString: "Canais")
+        let title = NSTextField(labelWithString: "Visionem DTV")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
         title.translatesAutoresizingMaskIntoConstraints = false
+        let subtitle = NSTextField(labelWithString: "TV digital brasileira")
+        subtitle.font = .systemFont(ofSize: 12, weight: .regular)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
 
         sidebar.addSubview(title)
+        sidebar.addSubview(subtitle)
         sidebar.addSubview(controls)
         sidebar.addSubview(scrollView)
 
@@ -159,10 +177,13 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             title.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14),
             title.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14),
             title.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 16),
+            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
 
             controls.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14),
             controls.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14),
-            controls.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 12),
+            controls.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
 
             scrollView.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
@@ -186,10 +207,23 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     @objc private func refreshChannels() {
         stopWatching()
+        clearChannelListForFreshScan()
         startScan()
     }
 
-    @objc private func stopWatching() {
+    private func clearChannelListForFreshScan() {
+        channels.removeAll()
+        tableView.reloadData()
+        if let url = channelsStoreURL() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        statusLabel.isHidden = false
+        detailLabel.isHidden = false
+        statusLabel.stringValue = "Limpando lista..."
+        detailLabel.stringValue = "A varredura sera executada do zero"
+    }
+
+    @objc func stopWatching() {
         playbackTimer?.invalidate()
         playbackTimer = nil
         frameTimer?.invalidate()
@@ -207,6 +241,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         playerView.player?.pause()
         playerView.player = nil
         frameView.image = nil
+        pipImageView.image = nil
         statusLabel.isHidden = false
         detailLabel.isHidden = false
         statusLabel.stringValue = "Parado"
@@ -271,6 +306,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     } else {
                         self.detailLabel.stringValue = "\(ready) canais com demod, \(carriers) com portadora"
                     }
+                    self.autoStartCurrentStreamIfAvailable()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -281,6 +317,39 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 }
             }
         }
+    }
+
+    private func autoStartCurrentStreamIfAvailable() {
+        guard let index = channels.firstIndex(where: { $0.number == 0 }) else { return }
+        if tableView.selectedRow != index {
+            tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        } else {
+            startWatching(channels[index])
+        }
+        tableView.scrollRowToVisible(index)
+    }
+
+    @objc private func togglePIP() {
+        if let pipWindow, pipWindow.isVisible {
+            pipWindow.orderOut(nil)
+            return
+        }
+        let panel = pipWindow ?? NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 220),
+            styleMask: [.titled, .closable, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Visionem DTV PIP"
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        pipImageView.imageScaling = .scaleProportionallyUpOrDown
+        pipImageView.wantsLayer = true
+        pipImageView.layer?.backgroundColor = NSColor.black.cgColor
+        panel.contentView = pipImageView
+        pipWindow = panel
+        panel.center()
+        panel.orderFrontRegardless()
     }
 
     private func applyScanResult(_ scanned: TVChannel) {
@@ -492,6 +561,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             }
             DispatchQueue.main.async {
                 self.frameView.image = image
+                self.pipImageView.image = image
                 self.statusLabel.isHidden = true
                 self.detailLabel.isHidden = true
             }
@@ -806,6 +876,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        controller?.stopWatching()
     }
 }
 
