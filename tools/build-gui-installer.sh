@@ -48,8 +48,13 @@ mkdir -p "$PKGROOT/Applications"
 install -m 0755 "$ROOT_DIR/build/siano-tv" "$PKGROOT/usr/local/bin/siano-tv"
 install -m 0644 "$ROOT_DIR/$FW_SOURCE" "$APP_SUPPORT/firmware/$FW_INSTALL_NAME"
 
+APP_ICON="$ROOT_DIR/assets/SianoTVDigital.icns"
+if [ ! -f "$APP_ICON" ]; then
+    swift "$ROOT_DIR/tools/create-app-icon.swift"
+fi
+
 APP_DIR="$PKGROOT/Applications/$APP_NAME.app"
-mkdir -p "$APP_DIR/Contents/MacOS"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -59,6 +64,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 	<string>Siano TV Digital</string>
 	<key>CFBundleExecutable</key>
 	<string>siano-tv-launcher</string>
+	<key>CFBundleIconFile</key>
+	<string>SianoTVDigital</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.local.sianotv.br.launcher</string>
 	<key>CFBundleName</key>
@@ -81,6 +88,7 @@ exec "$DIR/SianoTVPlayer"
 SCRIPT
 chmod 0755 "$APP_DIR/Contents/MacOS/siano-tv-launcher"
 install -m 0755 "$ROOT_DIR/build/SianoTVPlayer" "$APP_DIR/Contents/MacOS/SianoTVPlayer"
+install -m 0644 "$APP_ICON" "$APP_DIR/Contents/Resources/SianoTVDigital.icns"
 codesign --force --deep --sign - "$PKGROOT/Applications/$APP_NAME.app" >/dev/null
 dot_clean -m "$PKGROOT" >/dev/null 2>&1 || true
 xattr -cr "$PKGROOT" >/dev/null 2>&1 || true

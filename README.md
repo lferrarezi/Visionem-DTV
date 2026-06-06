@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.6.15`.
+Versao local: `1.6.16`.
 
 ## Estado Atual
 
@@ -123,7 +123,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.6.15-macos-installer.pkg
+dist/siano-tv-1.6.16-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -132,7 +132,7 @@ O instalador coloca:
 - `/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp`
 - `/Applications/Siano TV Digital.app`
 
-Depois de instalar, abra `Siano TV Digital.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware.
+Depois de instalar, abra `Siano TV Digital.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Na primeira execucao, o app comeca com a lista vazia e inicia uma varredura brasileira; depois passa a abrir com a ultima lista salva em `~/Library/Application Support/Siano TV Digital/channels-br.json`. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware. Quando o TS contem metadados de servico, o app salva o nome do canal exibido na lista.
 
 Tambem e possivel rodar pelo Terminal:
 
@@ -174,7 +174,7 @@ Validado neste Mac:
 - Firmware ISDB-T carrega.
 - Init ISDB-T e tune sao aceitos.
 - Estatisticas mostram `rf locked: 1` em frequencias testadas.
-- O ambiente atual ainda mostra `demod locked: 0`, portanto nao ha MPEG-TS/imagem ate melhorar sinal, antena ou completar configuracao de demod.
+- Recepcao validada com MPEG-TS real pelo caminho `dump-ts`, incluindo servicos `Globo HD` e `Globo 1Seg`, video H.264 320x180 e frame extraido com imagem.
 
 ## Estrutura
 
@@ -194,5 +194,5 @@ O app `Siano TV Digital.app` tem duas areas:
 - esquerda: exibicao do canal/estado de recepcao;
 - direita: lista de canais brasileiros mapeados.
 
-Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv watch-br <canal>`, grava em `~/Movies/SianoTV/` e inicia a reproducao quando houver MPEG-TS. Enquanto `demod=0` ou `bytes=0`, ele mostra estado de espera em vez de fingir imagem. O fallback `dump-ts` e acionado automaticamente se o processo principal falhar sem dados.
+Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv watch-br <canal>`, grava em `~/Movies/SianoTV/` e inicia a reproducao quando houver MPEG-TS. Enquanto `demod=0` ou `bytes=0`, ele mostra estado de espera em vez de fingir imagem. O fallback `dump-ts` e acionado automaticamente se o processo principal falhar sem dados. A lista de canais e persistida localmente e os nomes sao preenchidos a partir dos metadados do TS quando disponiveis.
 - `firmware`: instrucoes para obter firmware; blobs binarios nao sao versionados por padrao.
