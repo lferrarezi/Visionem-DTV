@@ -31,8 +31,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var channels: [TVChannel] = []
     private var scanProcess: Process?
     private var watchProcess: Process?
+    private var watchOutputPipe: Pipe?
     private var currentOutputURL: URL?
     private var playbackTimer: Timer?
+    private var fallbackDumpStarted = false
 
     override init() {
         window = NSWindow(
@@ -173,6 +175,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         scanProcess = nil
         watchProcess?.terminate()
         watchProcess = nil
+        watchOutputPipe?.fileHandleForReading.readabilityHandler = nil
+        watchOutputPipe = nil
+        fallbackDumpStarted = false
         playerView.player?.pause()
         playerView.player = nil
         statusLabel.stringValue = "Parado"
@@ -253,21 +258,70 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return
         }
 
+        fallbackDumpStarted = false
+        runWatchProcess(binary: binary, arguments: ["watch-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
+    }
+
+    private func runWatchProcess(binary: String, arguments: [String], outputURL: URL, channel: TVChannel, isFallback: Bool) {
         let process = Process()
+        let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["watch-br", "\(channel.number)", "3600", outputURL.path]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
         watchProcess = process
+        watchOutputPipe = pipe
+
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async {
+                self?.applyWatchOutput(text)
+            }
+        }
+
+        process.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.watchProcess === process else { return }
+                pipe.fileHandleForReading.readabilityHandler = nil
+                let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if size < 188 * 20, !isFallback, !self.fallbackDumpStarted {
+                    self.fallbackDumpStarted = true
+                    self.statusLabel.stringValue = "Recepcao ativa; usando fallback TS"
+                    self.detailLabel.stringValue = "Lendo fluxo MPEG-TS ja aberto pelo firmware"
+                    self.runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
+                    return
+                }
+                if size < 188 * 20 {
+                    self.statusLabel.stringValue = "Sem stream MPEG-TS"
+                    self.detailLabel.stringValue = "Ajuste a posicao do dongle e tente novamente"
+                }
+            }
+        }
 
         do {
             try process.run()
-            statusLabel.stringValue = "Sintonizando \(channel.title)..."
-            detailLabel.stringValue = channel.subtitle
+            statusLabel.stringValue = isFallback ? "Lendo stream MPEG-TS..." : "Sintonizando \(channel.title)..."
+            detailLabel.stringValue = isFallback ? outputURL.path : channel.subtitle
             schedulePlaybackProbe(outputURL)
         } catch {
-            statusLabel.stringValue = "Falha ao iniciar recepcao"
+            statusLabel.stringValue = isFallback ? "Falha no fallback TS" : "Falha ao iniciar recepcao"
             detailLabel.stringValue = error.localizedDescription
+        }
+    }
+
+    private func applyWatchOutput(_ text: String) {
+        let lines = text.split(separator: "\n").map(String.init)
+        guard let line = lines.last else { return }
+        if line.contains("bytes=") {
+            detailLabel.stringValue = line.trimmingCharacters(in: .whitespaces)
+        } else if line.contains("demod lock") {
+            statusLabel.stringValue = "Sinal digital travado"
+            detailLabel.stringValue = line.trimmingCharacters(in: .whitespaces)
+        } else if line.contains("final bytes") {
+            detailLabel.stringValue = line.trimmingCharacters(in: .whitespaces)
+        } else if line.contains("failed") {
+            detailLabel.stringValue = line.trimmingCharacters(in: .whitespaces)
         }
     }
 

@@ -61,7 +61,7 @@ No firmware oficial ISDB-Tb deste receptor, o fluxo TS tambem pode chegar como `
 
 `usb-reset` aciona reset USB via libusb. Em alguns hubs o MDTV Receiver sai do barramento e precisa ser reinserido fisicamente para reenumerar.
 
-`dump-ts <seconds> <out.ts>` nao envia comandos de controle; ele apenas despeja payloads TS ja presentes no bulk IN. E util quando o firmware ja iniciou streaming e comandos OUT passam a dar timeout.
+`dump-ts <seconds> <out.ts>` nao envia comandos de controle; ele apenas despeja payloads TS ja presentes no bulk IN. E util quando o firmware ja iniciou streaming e comandos OUT passam a dar timeout. Alem de mensagens Siano com header, o transporte aceita transferencias MPEG-TS cruas quando o bulk IN comeca diretamente em sync byte `0x47`.
 
 `SIANO_TV_FIRMWARE=/caminho/firmware.inp` força um firmware ISDB-T especifico. A leitura USB normaliza mensagens splitadas conforme a estrategia do driver Linux `smsusb`.
 

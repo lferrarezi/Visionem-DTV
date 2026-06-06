@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.6.13`.
+Versao local: `1.6.14`.
 
 ## Estado Atual
 
@@ -123,7 +123,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.6.13-macos-installer.pkg
+dist/siano-tv-1.6.14-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -132,7 +132,7 @@ O instalador coloca:
 - `/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp`
 - `/Applications/Siano TV Digital.app`
 
-Depois de instalar, abra `Siano TV Digital.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream.
+Depois de instalar, abra `Siano TV Digital.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware.
 
 Tambem e possivel rodar pelo Terminal:
 
@@ -194,5 +194,5 @@ O app `Siano TV Digital.app` tem duas areas:
 - esquerda: exibicao do canal/estado de recepcao;
 - direita: lista de canais brasileiros mapeados.
 
-Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv watch-br <canal>`, grava em `~/Movies/SianoTV/` e inicia a reproducao quando houver MPEG-TS. Enquanto `demod=0` ou `bytes=0`, ele mostra estado de espera em vez de fingir imagem.
+Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv watch-br <canal>`, grava em `~/Movies/SianoTV/` e inicia a reproducao quando houver MPEG-TS. Enquanto `demod=0` ou `bytes=0`, ele mostra estado de espera em vez de fingir imagem. O fallback `dump-ts` e acionado automaticamente se o processo principal falhar sem dados.
 - `firmware`: instrucoes para obter firmware; blobs binarios nao sao versionados por padrao.

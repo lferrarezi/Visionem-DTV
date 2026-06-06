@@ -205,6 +205,22 @@ static int smsusb_receive_message(smsusb_device_t *device, void *buffer, int buf
 }
 
 static int normalize_received_message(unsigned char *message, int transferred, size_t buffer_len, size_t *size_out, char *error, unsigned long error_len) {
+    if (transferred > 0 &&
+        (transferred % 188) == 0 &&
+        message[0] == 0x47 &&
+        (size_t)transferred + sizeof(sms_msg_hdr_t) <= buffer_len) {
+        memmove(message + sizeof(sms_msg_hdr_t), message, (size_t)transferred);
+        sms_msg_hdr_t *raw_header = (sms_msg_hdr_t *)message;
+        raw_header->msg_type = SMS_MSG_DAB_CHANNEL;
+        raw_header->msg_src_id = 0;
+        raw_header->msg_dst_id = 1;
+        raw_header->msg_length = (uint16_t)((size_t)transferred + sizeof(sms_msg_hdr_t));
+        raw_header->msg_flags = 0;
+        *size_out = raw_header->msg_length;
+        set_error(error, error_len, "");
+        return 0;
+    }
+
     if (transferred < (int)sizeof(sms_msg_hdr_t)) {
         snprintf(error, error_len, "bulk IN short message: %d bytes", transferred);
         return -1;
@@ -282,7 +298,7 @@ int smsusb_get_version(smsusb_device_t *device, sms_version_res_t *version, unsi
     sms_msg_hdr_t request;
     sms_msg_init(&request, SMS_MSG_GET_VERSION_EX_REQ, sizeof(request));
 
-    unsigned char buffer[SMSUSB_ENDPOINT_MAX_PACKET];
+    unsigned char buffer[SMSUSB_LARGE_MESSAGE_SIZE];
     int rc = smsusb_send_and_wait(
         device,
         &request,
