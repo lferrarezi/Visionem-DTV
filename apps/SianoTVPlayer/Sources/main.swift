@@ -15,6 +15,9 @@ struct TVChannel: Codable, Hashable, Sendable {
         return name
     }
     var subtitle: String {
+        if number <= 0 {
+            return "Transmissao detectada - \(band)"
+        }
         let prefix = (number > 0 && name != nil && name?.isEmpty == false) ? "Canal \(number) - " : ""
         let base = "\(prefix)\(band) - \(frequency) Hz"
         guard let rfLocked, let demodLocked else { return base }
@@ -25,12 +28,12 @@ struct TVChannel: Codable, Hashable, Sendable {
 }
 
 struct TransmissionProbe: Sendable {
-    let name: String
+    let serviceNames: [String]
     let hasVideo: Bool
     let bytes: Int
 }
 
-private let minimumPreviewBytes = 96 * 1024
+private let minimumPreviewBytes = 160 * 1024
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
@@ -40,7 +43,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private let detailLabel = NSTextField(labelWithString: "Visionem DTV - ISDB-Tb Brasil")
     private let playerView = AVPlayerView()
     private let frameView = NSImageView()
-    private let scanButton = NSButton(title: "Atualizar", target: nil, action: nil)
+    private let scanButton = NSButton(title: "Buscar", target: nil, action: nil)
     private let stopButton = NSButton(title: "Parar", target: nil, action: nil)
     private let pipButton = NSButton(title: "PIP", target: nil, action: nil)
     private var pipWindow: NSPanel?
@@ -58,7 +61,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 1220, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -75,7 +78,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func configureWindow() {
         window.title = "Visionem DTV"
-        window.minSize = NSSize(width: 860, height: 520)
+        window.minSize = NSSize(width: 960, height: 560)
 
         let root = NSSplitView()
         root.isVertical = true
@@ -87,7 +90,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         videoPane.wantsLayer = true
         videoPane.layer?.backgroundColor = NSColor.black.cgColor
         sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        sidebar.layer?.backgroundColor = NSColor(calibratedWhite: 0.07, alpha: 1).cgColor
         root.addArrangedSubview(videoPane)
         root.addArrangedSubview(sidebar)
 
@@ -97,11 +100,12 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         frameView.wantsLayer = true
         frameView.layer?.backgroundColor = NSColor.black.cgColor
         frameView.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        statusLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        statusLabel.textColor = .white
         statusLabel.alignment = .center
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         detailLabel.font = .systemFont(ofSize: 13)
-        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.textColor = NSColor(white: 0.78, alpha: 1)
         detailLabel.alignment = .center
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -114,7 +118,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         scrollView.hasVerticalScroller = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         tableView.headerView = nil
-        tableView.rowHeight = 54
+        tableView.rowHeight = 64
+        tableView.backgroundColor = NSColor(calibratedWhite: 0.07, alpha: 1)
+        tableView.gridStyleMask = []
+        tableView.selectionHighlightStyle = .regular
         tableView.delegate = self
         tableView.dataSource = self
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("channel"))
@@ -131,7 +138,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         pipButton.target = self
         pipButton.action = #selector(togglePIP)
         [scanButton, stopButton, pipButton].forEach { button in
-            button.bezelStyle = .rounded
+            button.bezelStyle = .texturedRounded
             button.controlSize = .large
         }
 
@@ -143,10 +150,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         let title = NSTextField(labelWithString: "Visionem DTV")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
+        title.textColor = .white
         title.translatesAutoresizingMaskIntoConstraints = false
         let subtitle = NSTextField(labelWithString: "TV digital brasileira")
         subtitle.font = .systemFont(ofSize: 12, weight: .regular)
-        subtitle.textColor = .secondaryLabelColor
+        subtitle.textColor = NSColor(white: 0.68, alpha: 1)
         subtitle.translatesAutoresizingMaskIntoConstraints = false
 
         sidebar.addSubview(title)
@@ -298,7 +306,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                         self.applyScanResult(channel)
                     }
                     if let currentTransmission, currentTransmission.hasVideo {
-                        self.applyScanResult(Self.currentStreamPlaceholder(name: currentTransmission.name))
+                        for (index, serviceName) in currentTransmission.serviceNames.enumerated() {
+                            self.applyScanResult(Self.currentStreamPlaceholder(name: serviceName, index: index))
+                        }
                     }
                     self.scanButton.isEnabled = true
                     self.persistChannels()
@@ -307,7 +317,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                         self.detailLabel.stringValue = "A busca so lista canais com TS, video e nome de servico confirmados"
                     } else {
                         self.statusLabel.stringValue = "Busca concluida"
-                        self.detailLabel.stringValue = "\(self.channels.count) transmissao encontrada"
+                        let suffix = self.channels.count == 1 ? "transmissao encontrada" : "transmissoes encontradas"
+                        self.detailLabel.stringValue = "\(self.channels.count) \(suffix)"
                     }
                     self.autoStartCurrentStreamIfAvailable()
                 }
@@ -362,7 +373,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             channels[index] = updated
         } else {
             channels.append(updated)
-            channels.sort { $0.number < $1.number }
+            sortChannels()
         }
         tableView.reloadData()
         persistChannels()
@@ -385,7 +396,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
 
         fallbackDumpStarted = false
-        if channel.number == 0 {
+        if channel.number <= 0 {
             fallbackDumpStarted = true
             runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
         } else {
@@ -455,7 +466,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size < 188 * 20 {
                     self.statusLabel.stringValue = "Sem stream MPEG-TS"
-                    self.detailLabel.stringValue = channel.number == 0
+                    self.detailLabel.stringValue = channel.number <= 0
                         ? "Ajuste a posicao do dongle e tente novamente"
                         : "Nao foi possivel sintonizar este canal fisico agora"
                 }
@@ -538,28 +549,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 }
                 return
             }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: ffmpeg)
-            process.arguments = [
-                "-hide_banner",
-                "-loglevel", "error",
-                "-y",
-                "-i", outputURL.path,
-                "-map", "0:v:0",
-                "-an",
-                "-frames:v", "1",
-                "-q:v", "3",
-                frameURL.path
-            ]
-            process.standardOutput = Pipe()
-            process.standardError = Pipe()
-            do {
-                try process.run()
-                process.waitUntilExit()
-            } catch {
-                return
-            }
-            guard process.terminationStatus == 0, let image = NSImage(contentsOf: frameURL) else {
+            guard Self.extractFrame(ffmpeg: ffmpeg, inputURL: outputURL, outputURL: frameURL),
+                  let image = NSImage(contentsOf: frameURL) else {
                 return
             }
             DispatchQueue.main.async {
@@ -569,6 +560,51 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 self.detailLabel.isHidden = true
             }
         }
+    }
+
+    nonisolated private static func extractFrame(ffmpeg: String, inputURL: URL, outputURL: URL) -> Bool {
+        let attempts: [[String]] = [
+            [],
+            ["-ss", "2"],
+            ["-ss", "5"],
+            ["-fflags", "+discardcorrupt", "-err_detect", "ignore_err"]
+        ]
+        for prefix in attempts {
+            try? FileManager.default.removeItem(at: outputURL)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: ffmpeg)
+            process.arguments = prefix + [
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-i", inputURL.path,
+                "-map", "0:v:0",
+                "-an",
+                "-frames:v", "1",
+                "-q:v", "3",
+                outputURL.path
+            ]
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            do {
+                try process.run()
+                let deadline = Date().addingTimeInterval(5)
+                while process.isRunning && Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+                if process.isRunning {
+                    process.terminate()
+                }
+                process.waitUntilExit()
+            } catch {
+                continue
+            }
+            if process.terminationStatus == 0,
+               FileManager.default.fileExists(atPath: outputURL.path) {
+                return true
+            }
+        }
+        return false
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -582,18 +618,24 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         cell.subviews.forEach { $0.removeFromSuperview() }
 
         let channel = channels[row]
+        cell.wantsLayer = true
+        cell.layer?.backgroundColor = NSColor(calibratedWhite: 0.07, alpha: 1).cgColor
         let title = NSTextField(labelWithString: channel.title)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
-        if channel.demodLocked == true {
+        if channel.number <= 0 {
+            title.textColor = NSColor(calibratedRed: 0.42, green: 0.92, blue: 0.74, alpha: 1)
+        } else if channel.demodLocked == true {
             title.textColor = .systemGreen
         } else if channel.rfLocked == true {
             title.textColor = .systemOrange
         } else if channel.rfLocked == false {
             title.textColor = .secondaryLabelColor
+        } else {
+            title.textColor = .white
         }
         let subtitle = NSTextField(labelWithString: channel.subtitle)
         subtitle.font = .systemFont(ofSize: 12)
-        subtitle.textColor = .secondaryLabelColor
+        subtitle.textColor = NSColor(white: 0.68, alpha: 1)
         let stack = NSStackView(views: [title, subtitle])
         stack.orientation = .vertical
         stack.spacing = 3
@@ -661,12 +703,15 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func captureURL(for channel: Int) -> URL {
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
+        if channel <= 0 {
+            return movies.appendingPathComponent("SianoTV/fluxo-\(abs(channel)).ts")
+        }
         return movies.appendingPathComponent("SianoTV/canal-\(channel).ts")
     }
 
-    private static func currentStreamPlaceholder(name: String) -> TVChannel {
+    private static func currentStreamPlaceholder(name: String, index: Int) -> TVChannel {
         TVChannel(
-            number: 0,
+            number: -index,
             band: "fluxo MPEG-TS atual",
             frequency: 0,
             name: name,
@@ -711,7 +756,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
               let saved = try? JSONDecoder().decode([TVChannel].self, from: data) else {
             return migrateLegacyChannels()
         }
-        return saved.sorted { $0.number < $1.number }
+        return Self.sortedChannels(saved)
     }
 
     private func migrateLegacyChannels() -> [TVChannel] {
@@ -721,7 +766,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
               let saved = try? JSONDecoder().decode([TVChannel].self, from: data) else {
             return []
         }
-        channels = saved.sorted { $0.number < $1.number }
+        channels = Self.sortedChannels(saved)
         persistChannels()
         try? FileManager.default.removeItem(at: sourceURL)
         try? FileManager.default.removeItem(at: sourceURL.deletingLastPathComponent())
@@ -732,16 +777,31 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard let url = channelsStoreURL() else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(channels.sorted { $0.number < $1.number })
+            let data = try JSONEncoder().encode(Self.sortedChannels(channels))
             try data.write(to: url, options: [.atomic])
         } catch {
             detailLabel.stringValue = "Nao foi possivel salvar canais: \(error.localizedDescription)"
         }
     }
 
+    private func sortChannels() {
+        channels = Self.sortedChannels(channels)
+    }
+
+    private static func sortedChannels(_ channels: [TVChannel]) -> [TVChannel] {
+        channels.sorted { lhs, rhs in
+            if lhs.number <= 0 && rhs.number <= 0 {
+                return lhs.number > rhs.number
+            }
+            if lhs.number <= 0 { return true }
+            if rhs.number <= 0 { return false }
+            return lhs.number < rhs.number
+        }
+    }
+
     private func updateChannelNameFromTransportStream(_ url: URL, channelNumber: Int) {
         DispatchQueue.global(qos: .utility).async {
-            guard let name = Self.detectServiceName(in: url) else { return }
+            guard let name = Self.detectServiceNames(in: url).first else { return }
             DispatchQueue.main.async {
                 guard let index = self.channels.firstIndex(where: { $0.number == channelNumber }) else { return }
                 if self.channels[index].name != name {
@@ -753,9 +813,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
     }
 
-    nonisolated private static func detectServiceName(in url: URL) -> String? {
+    nonisolated private static func detectServiceNames(in url: URL) -> [String] {
         guard let ffprobe = findExecutable(["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]) else {
-            return nil
+            return []
         }
         let process = Process()
         let pipe = Pipe()
@@ -771,7 +831,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         do {
             try process.run()
         } catch {
-            return nil
+            return []
         }
         let deadline = Date().addingTimeInterval(6)
         while process.isRunning && Date() < deadline {
@@ -780,15 +840,21 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if process.isRunning {
             process.terminate()
             process.waitUntilExit()
-            return nil
+            return []
         }
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
+        guard process.terminationStatus == 0 else { return [] }
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return output
-            .split(separator: "\n")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty && $0.lowercased() != "unknown" }
+        var names: [String] = []
+        var seen = Set<String>()
+        for line in output.split(separator: "\n") {
+            let name = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = name.lowercased()
+            guard !name.isEmpty, key != "unknown", !seen.contains(key) else { continue }
+            seen.insert(key)
+            names.append(name)
+        }
+        return names
     }
 
     nonisolated private static func findExecutable(_ candidates: [String]) -> String? {
@@ -802,7 +868,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["dump-ts", "8", outputURL.path]
+        process.arguments = ["dump-ts", "12", outputURL.path]
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         do {
@@ -810,7 +876,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         } catch {
             return nil
         }
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(15)
         while process.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
@@ -822,9 +888,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        guard size > minimumPreviewBytes,
-              let name = detectServiceName(in: outputURL) else { return nil }
-        return TransmissionProbe(name: name, hasVideo: hasVideoStream(in: outputURL), bytes: size)
+        let serviceNames = detectServiceNames(in: outputURL)
+        guard size > minimumPreviewBytes, !serviceNames.isEmpty else { return nil }
+        return TransmissionProbe(serviceNames: serviceNames, hasVideo: hasVideoStream(in: outputURL), bytes: size)
     }
 
     nonisolated private static func hasVideoStream(in url: URL) -> Bool {
