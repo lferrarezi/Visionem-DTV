@@ -2,8 +2,8 @@ import AppKit
 import Foundation
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-let iconset = root.appendingPathComponent("assets/SianoTVDigital.iconset", isDirectory: true)
-let icns = root.appendingPathComponent("assets/SianoTVDigital.icns")
+let iconset = root.appendingPathComponent("assets/Visionem.iconset", isDirectory: true)
+let icns = root.appendingPathComponent("assets/Visionem.icns")
 
 try? FileManager.default.removeItem(at: iconset)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)

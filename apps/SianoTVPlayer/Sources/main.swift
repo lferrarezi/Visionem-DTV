@@ -29,7 +29,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private let window: NSWindow
     private let tableView = NSTableView()
     private let statusLabel = NSTextField(labelWithString: "Selecione um canal para assistir")
-    private let detailLabel = NSTextField(labelWithString: "Siano TV Digital - ISDB-Tb Brasil")
+    private let detailLabel = NSTextField(labelWithString: "Visionem - ISDB-Tb Brasil")
     private let playerView = AVPlayerView()
     private let scanButton = NSButton(title: "Atualizar", target: nil, action: nil)
     private let stopButton = NSButton(title: "Parar", target: nil, action: nil)
@@ -60,7 +60,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func configureWindow() {
-        window.title = "Siano TV Digital"
+        window.title = "Visionem"
         window.minSize = NSSize(width: 860, height: 520)
 
         let root = NSSplitView()
@@ -535,6 +535,13 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
+        return appSupport.appendingPathComponent("Visionem/channels-br.json")
+    }
+
+    private func legacyChannelsStoreURL() -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
         return appSupport.appendingPathComponent("Siano TV Digital/channels-br.json")
     }
 
@@ -542,9 +549,22 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard let url = channelsStoreURL(),
               let data = try? Data(contentsOf: url),
               let saved = try? JSONDecoder().decode([TVChannel].self, from: data) else {
-            return []
+            return migrateLegacyChannels()
         }
         return saved.sorted { $0.number < $1.number }
+    }
+
+    private func migrateLegacyChannels() -> [TVChannel] {
+        guard let legacyURL = legacyChannelsStoreURL(),
+              let data = try? Data(contentsOf: legacyURL),
+              let saved = try? JSONDecoder().decode([TVChannel].self, from: data) else {
+            return []
+        }
+        channels = saved.sorted { $0.number < $1.number }
+        persistChannels()
+        try? FileManager.default.removeItem(at: legacyURL)
+        try? FileManager.default.removeItem(at: legacyURL.deletingLastPathComponent())
+        return channels
     }
 
     private func persistChannels() {

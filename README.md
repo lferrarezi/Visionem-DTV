@@ -1,8 +1,8 @@
-# Siano TV Digital
+# Visionem
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.6.16`.
+Versao local: `1.7.0`.
 
 ## Estado Atual
 
@@ -123,16 +123,18 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/siano-tv-1.6.16-macos-installer.pkg
+dist/visionem-1.7.0-macos-installer.pkg
 ```
 
 O instalador coloca:
 
 - `/usr/local/bin/siano-tv`
-- `/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp`
-- `/Applications/Siano TV Digital.app`
+- `/Library/Application Support/Visionem/firmware/isdbt_nova_12mhz_b0.inp`
+- `/Applications/Visionem.app`
 
-Depois de instalar, abra `Siano TV Digital.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Na primeira execucao, o app comeca com a lista vazia e inicia uma varredura brasileira; depois passa a abrir com a ultima lista salva em `~/Library/Application Support/Siano TV Digital/channels-br.json`. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware. Quando o TS contem metadados de servico, o app salva o nome do canal exibido na lista.
+Antes de instalar a nova versao, o instalador remove instalacoes anteriores em `/Applications/Siano TV Digital.app`, `/Applications/Visionem.app`, `/Library/Application Support/Siano TV Digital`, `/Library/Application Support/Visionem` e `/usr/local/bin/siano-tv`.
+
+Depois de instalar, abra `Visionem.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Na primeira execucao, o app comeca com a lista vazia e inicia uma varredura brasileira; depois passa a abrir com a ultima lista salva em `~/Library/Application Support/Visionem/channels-br.json`. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware. Quando o TS contem metadados de servico, o app salva o nome do canal exibido na lista.
 
 Tambem e possivel rodar pelo Terminal:
 
@@ -189,7 +191,7 @@ Validado neste Mac:
 
 ## App De Canais
 
-O app `Siano TV Digital.app` tem duas areas:
+O app `Visionem.app` tem duas areas:
 
 - esquerda: exibicao do canal/estado de recepcao;
 - direita: lista de canais brasileiros mapeados.

@@ -285,8 +285,10 @@ static const char *find_isdbt_firmware(void) {
 
     const char *paths[] = {
         "firmware/isdbt_nova_12mhz_b0_official_2010.inp",
+        "/Library/Application Support/Visionem/firmware/isdbt_nova_12mhz_b0_official_2010.inp",
         "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0_official_2010.inp",
         "firmware/isdbt_nova_12mhz_b0.inp",
+        "/Library/Application Support/Visionem/firmware/isdbt_nova_12mhz_b0.inp",
         "/Library/Application Support/Siano TV Digital/firmware/isdbt_nova_12mhz_b0.inp",
         "/usr/local/share/siano-tv/firmware/isdbt_nova_12mhz_b0.inp",
         "/Users/lferrarezi/Downloads/Infinito PenTV/Mini_PENTV_USB/Linux/isdbt_nova_12mhz_b0.inp",
