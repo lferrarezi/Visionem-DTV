@@ -254,7 +254,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     self.channels.removeAll { channel in
                         channel.name == nil && channel.rfLocked != true && channel.demodLocked != true
                     }
-                    for channel in scanned {
+                    let discovered = scanned.isEmpty ? Self.brazilianChannelCandidates(existing: self.channels) : scanned
+                    for channel in discovered {
                         self.applyScanResult(channel)
                     }
                     if scanned.isEmpty, self.isMDTVPresent(binary: binary) {
@@ -265,7 +266,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     self.statusLabel.stringValue = "Atualizacao concluida"
                     let ready = self.channels.filter { $0.demodLocked == true }.count
                     let carriers = self.channels.filter { $0.rfLocked == true }.count
-                    self.detailLabel.stringValue = "\(ready) canais com demod, \(carriers) com portadora"
+                    if scanned.isEmpty {
+                        self.detailLabel.stringValue = "Varredura de controle indisponivel; exibindo canais brasileiros candidatos"
+                    } else {
+                        self.detailLabel.stringValue = "\(ready) canais com demod, \(carriers) com portadora"
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -308,7 +313,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
 
         fallbackDumpStarted = false
-        if channel.number == 0 || shouldStartWithDump(binary: binary) {
+        if channel.number == 0 {
             fallbackDumpStarted = true
             runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
         } else {
@@ -376,16 +381,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 guard let self, self.watchProcess === process else { return }
                 pipe.fileHandleForReading.readabilityHandler = nil
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                if size < 188 * 20, !isFallback, !self.fallbackDumpStarted {
-                    self.fallbackDumpStarted = true
-                    self.statusLabel.stringValue = "Recepcao ativa; usando fallback TS"
-                    self.detailLabel.stringValue = "Lendo fluxo MPEG-TS ja aberto pelo firmware"
-                    self.runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
-                    return
-                }
                 if size < 188 * 20 {
                     self.statusLabel.stringValue = "Sem stream MPEG-TS"
-                    self.detailLabel.stringValue = "Ajuste a posicao do dongle e tente novamente"
+                    self.detailLabel.stringValue = channel.number == 0
+                        ? "Ajuste a posicao do dongle e tente novamente"
+                        : "Nao foi possivel sintonizar este canal fisico agora"
                 }
             }
         }
@@ -603,6 +603,56 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         )
     }
 
+    private static func brazilianChannelCandidates(existing: [TVChannel]) -> [TVChannel] {
+        (1...59).compactMap { number in
+            guard let frequency = brazilianFrequency(channel: number) else { return nil }
+            let previous = existing.first { $0.number == number }
+            return TVChannel(
+                number: number,
+                band: brazilianBand(channel: number),
+                frequency: frequency,
+                name: previous?.name,
+                rfLocked: previous?.rfLocked,
+                demodLocked: previous?.demodLocked,
+                scanStatus: "candidato"
+            )
+        }
+    }
+
+    private static func brazilianFrequency(channel: Int) -> Int? {
+        switch channel {
+        case 1:
+            return 47_142_857
+        case 2...4:
+            return 57_142_857 + (channel - 2) * 6_000_000
+        case 5:
+            return 79_142_857
+        case 6:
+            return 85_142_857
+        case 7...13:
+            return 177_142_857 + (channel - 7) * 6_000_000
+        case 14...59:
+            return 473_142_857 + (channel - 14) * 6_000_000
+        default:
+            return nil
+        }
+    }
+
+    private static func brazilianBand(channel: Int) -> String {
+        switch channel {
+        case 1:
+            return "VHF-I legado"
+        case 2...6:
+            return "VHF baixo"
+        case 7...13:
+            return "VHF alto"
+        case 14...59:
+            return "UHF"
+        default:
+            return "fora_plano"
+        }
+    }
+
     private func findSianoTVBinary() -> String? {
         let candidates = [
             "/usr/local/bin/siano-tv",
@@ -697,10 +747,19 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         process.standardError = Pipe()
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return nil
         }
+        let deadline = Date().addingTimeInterval(6)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            return nil
+        }
+        process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         return output
