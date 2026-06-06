@@ -1,8 +1,8 @@
-# Visionem
+# Visionem DTV
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.7.0`.
+Versao local: `1.7.1`.
 
 ## Estado Atual
 
@@ -123,18 +123,18 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-1.7.0-macos-installer.pkg
+dist/visionem-dtv-1.7.1-macos-installer.pkg
 ```
 
 O instalador coloca:
 
 - `/usr/local/bin/siano-tv`
-- `/Library/Application Support/Visionem/firmware/isdbt_nova_12mhz_b0.inp`
-- `/Applications/Visionem.app`
+- `/Library/Application Support/Visionem DTV/firmware/isdbt_nova_12mhz_b0.inp`
+- `/Applications/Visionem DTV.app`
 
-Antes de instalar a nova versao, o instalador remove instalacoes anteriores em `/Applications/Siano TV Digital.app`, `/Applications/Visionem.app`, `/Library/Application Support/Siano TV Digital`, `/Library/Application Support/Visionem` e `/usr/local/bin/siano-tv`.
+Antes de instalar a nova versao, o instalador remove instalacoes anteriores em `/Applications/Siano TV Digital.app`, `/Applications/Visionem.app`, `/Applications/Visionem DTV.app`, `/Library/Application Support/Siano TV Digital`, `/Library/Application Support/Visionem`, `/Library/Application Support/Visionem DTV` e `/usr/local/bin/siano-tv`.
 
-Depois de instalar, abra `Visionem.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Na primeira execucao, o app comeca com a lista vazia e inicia uma varredura brasileira; depois passa a abrir com a ultima lista salva em `~/Library/Application Support/Visionem/channels-br.json`. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware. Quando o TS contem metadados de servico, o app salva o nome do canal exibido na lista.
+Depois de instalar, abra `Visionem DTV.app`. A janela mostra video/estado de recepcao a esquerda e a lista de canais brasileiros mapeados a direita. Na primeira execucao, o app comeca com a lista vazia e inicia uma varredura brasileira; depois passa a abrir com a ultima lista salva em `~/Library/Application Support/Visionem DTV/channels-br.json`. Ao selecionar um canal, o app chama `siano-tv watch-br`, grava o TS em `~/Movies/SianoTV/` e inicia reproducao quando houver stream. Se o `watch-br` encerrar antes de gravar TS, o app tenta automaticamente `dump-ts` para aproveitar fluxos ja abertos pelo firmware. Como o `AVPlayer` do macOS nao renderiza de forma confiavel o TS 1seg/AAC LATM recebido, o app usa `ffmpeg` para extrair frames continuamente e exibir a transmissao dentro da propria janela. Quando o TS contem metadados de servico, o app salva o nome do canal exibido na lista.
 
 Tambem e possivel rodar pelo Terminal:
 
@@ -191,10 +191,10 @@ Validado neste Mac:
 
 ## App De Canais
 
-O app `Visionem.app` tem duas areas:
+O app `Visionem DTV.app` tem duas areas:
 
 - esquerda: exibicao do canal/estado de recepcao;
 - direita: lista de canais brasileiros mapeados.
 
-Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv watch-br <canal>`, grava em `~/Movies/SianoTV/` e inicia a reproducao quando houver MPEG-TS. Enquanto `demod=0` ou `bytes=0`, ele mostra estado de espera em vez de fingir imagem. O fallback `dump-ts` e acionado automaticamente se o processo principal falhar sem dados. A lista de canais e persistida localmente e os nomes sao preenchidos a partir dos metadados do TS quando disponiveis.
+Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv watch-br <canal>`, grava em `~/Movies/SianoTV/` e inicia a exibicao quando houver MPEG-TS. Enquanto `demod=0` ou `bytes=0`, ele mostra estado de espera em vez de fingir imagem. O fallback `dump-ts` e acionado automaticamente se o processo principal falhar sem dados. A lista de canais e persistida localmente e os nomes sao preenchidos a partir dos metadados do TS quando disponiveis.
 - `firmware`: instrucoes para obter firmware; blobs binarios nao sao versionados por padrao.

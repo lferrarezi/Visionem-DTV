@@ -26,11 +26,13 @@ struct TVChannel: Codable, Hashable, Sendable {
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    private static let minimumPreviewBytes = 96 * 1024
     private let window: NSWindow
     private let tableView = NSTableView()
     private let statusLabel = NSTextField(labelWithString: "Selecione um canal para assistir")
-    private let detailLabel = NSTextField(labelWithString: "Visionem - ISDB-Tb Brasil")
+    private let detailLabel = NSTextField(labelWithString: "Visionem DTV - ISDB-Tb Brasil")
     private let playerView = AVPlayerView()
+    private let frameView = NSImageView()
     private let scanButton = NSButton(title: "Atualizar", target: nil, action: nil)
     private let stopButton = NSButton(title: "Parar", target: nil, action: nil)
     private var channels: [TVChannel] = []
@@ -40,6 +42,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var currentOutputURL: URL?
     private var currentChannelNumber: Int?
     private var playbackTimer: Timer?
+    private var frameTimer: Timer?
+    private var isExtractingFrame = false
     private var fallbackDumpStarted = false
 
     override init() {
@@ -60,7 +64,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func configureWindow() {
-        window.title = "Visionem"
+        window.title = "Visionem DTV"
         window.minSize = NSSize(width: 860, height: 520)
 
         let root = NSSplitView()
@@ -75,6 +79,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         playerView.controlsStyle = .inline
         playerView.translatesAutoresizingMaskIntoConstraints = false
+        frameView.imageScaling = .scaleProportionallyUpOrDown
+        frameView.wantsLayer = true
+        frameView.layer?.backgroundColor = NSColor.black.cgColor
+        frameView.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         statusLabel.alignment = .center
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -84,6 +92,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
 
         videoPane.addSubview(playerView)
+        videoPane.addSubview(frameView)
         videoPane.addSubview(statusLabel)
         videoPane.addSubview(detailLabel)
 
@@ -137,6 +146,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             playerView.topAnchor.constraint(equalTo: videoPane.topAnchor),
             playerView.bottomAnchor.constraint(equalTo: videoPane.bottomAnchor),
 
+            frameView.leadingAnchor.constraint(equalTo: videoPane.leadingAnchor),
+            frameView.trailingAnchor.constraint(equalTo: videoPane.trailingAnchor),
+            frameView.topAnchor.constraint(equalTo: videoPane.topAnchor),
+            frameView.bottomAnchor.constraint(equalTo: videoPane.bottomAnchor),
+
             statusLabel.centerXAnchor.constraint(equalTo: videoPane.centerXAnchor),
             statusLabel.centerYAnchor.constraint(equalTo: videoPane.centerYAnchor, constant: -16),
             detailLabel.centerXAnchor.constraint(equalTo: videoPane.centerXAnchor),
@@ -178,6 +192,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     @objc private func stopWatching() {
         playbackTimer?.invalidate()
         playbackTimer = nil
+        frameTimer?.invalidate()
+        frameTimer = nil
+        isExtractingFrame = false
         scanProcess?.terminate()
         scanProcess = nil
         watchProcess?.terminate()
@@ -189,6 +206,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         fallbackDumpStarted = false
         playerView.player?.pause()
         playerView.player = nil
+        frameView.image = nil
+        statusLabel.isHidden = false
+        detailLabel.isHidden = false
         statusLabel.stringValue = "Parado"
         detailLabel.stringValue = "Selecione um canal para assistir"
     }
@@ -401,19 +421,79 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             Task { @MainActor in
                 guard let self else { return }
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                if size > 188 * 20 {
+                if size > Self.minimumPreviewBytes {
                     self.updateChannelNameFromTransportStream(outputURL, channelNumber: channelNumber)
-                    let player = AVPlayer(url: outputURL)
-                    self.playerView.player = player
-                    self.statusLabel.stringValue = "Reproduzindo"
+                    self.startFramePreview(outputURL)
+                    self.statusLabel.stringValue = "Recebendo transmissao"
                     self.detailLabel.stringValue = outputURL.path
-                    player.play()
                     self.playbackTimer?.invalidate()
                     self.playbackTimer = nil
                 } else {
-                    self.statusLabel.stringValue = "Aguardando stream MPEG-TS..."
-                    self.detailLabel.stringValue = "Se permanecer sem imagem, ajuste a posicao do dongle"
+                    self.statusLabel.isHidden = false
+                    self.detailLabel.isHidden = false
+                    self.statusLabel.stringValue = "Aguardando video..."
+                    self.detailLabel.stringValue = "Recebendo TS; aguardando pacotes de video suficientes"
                 }
+            }
+        }
+    }
+
+    private func startFramePreview(_ outputURL: URL) {
+        frameTimer?.invalidate()
+        renderFrame(from: outputURL)
+        frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.renderFrame(from: outputURL)
+            }
+        }
+    }
+
+    private func renderFrame(from outputURL: URL) {
+        guard !isExtractingFrame else { return }
+        isExtractingFrame = true
+        let frameURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("visionem-dtv-frame-\(UUID().uuidString).jpg")
+        DispatchQueue.global(qos: .utility).async {
+            defer {
+                try? FileManager.default.removeItem(at: frameURL)
+                DispatchQueue.main.async {
+                    self.isExtractingFrame = false
+                }
+            }
+            guard let ffmpeg = Self.findExecutable(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]) else {
+                DispatchQueue.main.async {
+                    self.detailLabel.stringValue = "ffmpeg nao encontrado para preview interno"
+                }
+                return
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: ffmpeg)
+            process.arguments = [
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-i", outputURL.path,
+                "-map", "0:v:0",
+                "-an",
+                "-frames:v", "1",
+                "-q:v", "3",
+                frameURL.path
+            ]
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                return
+            }
+            guard process.terminationStatus == 0, let image = NSImage(contentsOf: frameURL) else {
+                return
+            }
+            DispatchQueue.main.async {
+                self.frameView.image = image
+                self.statusLabel.isHidden = true
+                self.detailLabel.isHidden = true
             }
         }
     }
@@ -535,7 +615,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
-        return appSupport.appendingPathComponent("Visionem/channels-br.json")
+        return appSupport.appendingPathComponent("Visionem DTV/channels-br.json")
     }
 
     private func legacyChannelsStoreURL() -> URL? {
@@ -543,6 +623,13 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return nil
         }
         return appSupport.appendingPathComponent("Siano TV Digital/channels-br.json")
+    }
+
+    private func visionemChannelsStoreURL() -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return appSupport.appendingPathComponent("Visionem/channels-br.json")
     }
 
     private func loadSavedChannels() -> [TVChannel] {
@@ -555,15 +642,16 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func migrateLegacyChannels() -> [TVChannel] {
-        guard let legacyURL = legacyChannelsStoreURL(),
-              let data = try? Data(contentsOf: legacyURL),
+        let candidateURLs = [visionemChannelsStoreURL(), legacyChannelsStoreURL()].compactMap { $0 }
+        guard let sourceURL = candidateURLs.first(where: { FileManager.default.fileExists(atPath: $0.path) }),
+              let data = try? Data(contentsOf: sourceURL),
               let saved = try? JSONDecoder().decode([TVChannel].self, from: data) else {
             return []
         }
         channels = saved.sorted { $0.number < $1.number }
         persistChannels()
-        try? FileManager.default.removeItem(at: legacyURL)
-        try? FileManager.default.removeItem(at: legacyURL.deletingLastPathComponent())
+        try? FileManager.default.removeItem(at: sourceURL)
+        try? FileManager.default.removeItem(at: sourceURL.deletingLastPathComponent())
         return channels
     }
 
@@ -593,8 +681,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     nonisolated private static func detectServiceName(in url: URL) -> String? {
-        let candidates = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
-        guard let ffprobe = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+        guard let ffprobe = findExecutable(["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]) else {
             return nil
         }
         let process = Process()
@@ -620,6 +707,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             .split(separator: "\n")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty && $0.lowercased() != "unknown" }
+    }
+
+    nonisolated private static func findExecutable(_ candidates: [String]) -> String? {
+        candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     nonisolated private static func detectCurrentStreamName(binary: String) -> String? {

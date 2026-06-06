@@ -6,14 +6,14 @@ export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(cat "$ROOT_DIR/VERSION")"
 DIST_DIR="$ROOT_DIR/dist"
-PKGROOT="${TMPDIR:-/tmp}/visionem-pkgroot-$VERSION"
-CLEAN_PKGROOT="${TMPDIR:-/tmp}/visionem-pkgroot-clean-$VERSION"
-PKG_SCRIPTS="${TMPDIR:-/tmp}/visionem-pkg-scripts-$VERSION"
-COMPONENT_DIR="${TMPDIR:-/tmp}/visionem-component-$VERSION"
-APP_NAME="Visionem"
-APP_SUPPORT="$PKGROOT/Library/Application Support/Visionem"
-COMPONENT_PKG="$DIST_DIR/visionem-$VERSION-component.pkg"
-FINAL_PKG="$DIST_DIR/visionem-$VERSION-macos-installer.pkg"
+PKGROOT="${TMPDIR:-/tmp}/visionem-dtv-pkgroot-$VERSION"
+CLEAN_PKGROOT="${TMPDIR:-/tmp}/visionem-dtv-pkgroot-clean-$VERSION"
+PKG_SCRIPTS="${TMPDIR:-/tmp}/visionem-dtv-pkg-scripts-$VERSION"
+COMPONENT_DIR="${TMPDIR:-/tmp}/visionem-dtv-component-$VERSION"
+APP_NAME="Visionem DTV"
+APP_SUPPORT="$PKGROOT/Library/Application Support/Visionem DTV"
+COMPONENT_PKG="$DIST_DIR/visionem-dtv-$VERSION-component.pkg"
+FINAL_PKG="$DIST_DIR/visionem-dtv-$VERSION-macos-installer.pkg"
 KEEP_COMPONENT_PKG="${KEEP_COMPONENT_PKG:-0}"
 
 cd "$ROOT_DIR"
@@ -41,6 +41,8 @@ find "$DIST_DIR" -maxdepth 1 -type f \( \
     -name 'siano-tv-*-macos-installer.pkg' -o \
     -name 'visionem-*-component.pkg' -o \
     -name 'visionem-*-macos-installer.pkg' -o \
+    -name 'visionem-dtv-*-component.pkg' -o \
+    -name 'visionem-dtv-*-macos-installer.pkg' -o \
     -name 'siano-tv-launcher.applescript' \
 \) -delete
 mkdir -p "$PKGROOT/usr/local/bin"
@@ -63,15 +65,15 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Visionem</string>
+	<string>Visionem DTV</string>
 	<key>CFBundleExecutable</key>
 	<string>visionem-launcher</string>
 	<key>CFBundleIconFile</key>
 	<string>Visionem</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.local.visionem.br.launcher</string>
+	<string>com.local.visionemdtv.br.launcher</string>
 	<key>CFBundleName</key>
-	<string>Visionem</string>
+	<string>Visionem DTV</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -106,14 +108,16 @@ set -eu
 rm -f "/usr/local/bin/siano-tv"
 rm -rf "/Applications/Siano TV Digital.app"
 rm -rf "/Applications/Visionem.app"
+rm -rf "/Applications/Visionem DTV.app"
 rm -rf "/Library/Application Support/Siano TV Digital"
 rm -rf "/Library/Application Support/Visionem"
+rm -rf "/Library/Application Support/Visionem DTV"
 exit 0
 SCRIPT
 cat > "$PKG_SCRIPTS/postinstall" <<'SCRIPT'
 #!/bin/sh
 set -eu
-find "/usr/local" "/Applications/Siano TV Digital.app" "/Applications/Visionem.app" "/Library/Application Support/Siano TV Digital" "/Library/Application Support/Visionem" \
+find "/usr/local" "/Applications/Siano TV Digital.app" "/Applications/Visionem.app" "/Applications/Visionem DTV.app" "/Library/Application Support/Siano TV Digital" "/Library/Application Support/Visionem" "/Library/Application Support/Visionem DTV" \
     \( -name '._*' -o -name '.__*' \) -exec rm -rf {} + 2>/dev/null || true
 exit 0
 SCRIPT
@@ -138,20 +142,20 @@ cat > "$COMPONENT_DIR/PackageInfo" <<PACKAGEINFO
 <?xml version="1.0" encoding="utf-8"?>
 <pkg-info overwrite-permissions="true" relocatable="false" identifier="com.local.sianotv.br" postinstall-action="none" version="$VERSION" format-version="2" install-location="/" auth="root">
     <payload numberOfFiles="$PAYLOAD_FILES" installKBytes="$INSTALL_KB"/>
-    <bundle path="./Applications/$APP_NAME.app" id="com.local.visionem.br.launcher" CFBundleShortVersionString="$VERSION" CFBundleVersion="$VERSION"/>
+    <bundle path="./Applications/$APP_NAME.app" id="com.local.visionemdtv.br.launcher" CFBundleShortVersionString="$VERSION" CFBundleVersion="$VERSION"/>
     <bundle-version>
-        <bundle id="com.local.visionem.br.launcher"/>
+        <bundle id="com.local.visionemdtv.br.launcher"/>
     </bundle-version>
     <upgrade-bundle>
-        <bundle id="com.local.visionem.br.launcher"/>
+        <bundle id="com.local.visionemdtv.br.launcher"/>
     </upgrade-bundle>
     <update-bundle/>
     <atomic-update-bundle/>
     <strict-identifier>
-        <bundle id="com.local.visionem.br.launcher"/>
+        <bundle id="com.local.visionemdtv.br.launcher"/>
     </strict-identifier>
     <relocate>
-        <bundle id="com.local.visionem.br.launcher"/>
+        <bundle id="com.local.visionemdtv.br.launcher"/>
     </relocate>
     <scripts>
         <preinstall file="./preinstall" timeout="600"/>

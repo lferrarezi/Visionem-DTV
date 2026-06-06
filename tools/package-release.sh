@@ -4,7 +4,7 @@ set -eu
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 VERSION="$(cat "$ROOT_DIR/VERSION")"
 DIST_DIR="$ROOT_DIR/dist"
-PKG_DIR="$DIST_DIR/visionem-$VERSION"
+PKG_DIR="$DIST_DIR/visionem-dtv-$VERSION"
 
 cd "$ROOT_DIR"
 
@@ -15,8 +15,10 @@ mkdir -p "$DIST_DIR"
 find "$DIST_DIR" -maxdepth 1 \( \
     -type d -name 'siano-tv-*' -o \
     -type d -name 'visionem-*' -o \
+    -type d -name 'visionem-dtv-*' -o \
     -type f -name 'siano-tv-*-macos-arm64.tar.gz' -o \
     -type f -name 'visionem-*-macos-arm64.tar.gz' \
+    -o -type f -name 'visionem-dtv-*-macos-arm64.tar.gz' \
 \) -exec rm -rf {} +
 mkdir -p "$PKG_DIR/bin" "$PKG_DIR/firmware" "$PKG_DIR/docs" "$PKG_DIR/tools" "$PKG_DIR/apps" "$PKG_DIR/assets"
 
@@ -35,6 +37,6 @@ elif [ -f firmware/isdbt_nova_12mhz_b0.inp ]; then
     cp firmware/isdbt_nova_12mhz_b0.inp "$PKG_DIR/firmware/"
 fi
 
-tar -C "$DIST_DIR" -czf "$DIST_DIR/visionem-$VERSION-macos-arm64.tar.gz" "visionem-$VERSION"
+tar -C "$DIST_DIR" -czf "$DIST_DIR/visionem-dtv-$VERSION-macos-arm64.tar.gz" "visionem-dtv-$VERSION"
 rm -rf "$PKG_DIR"
-shasum -a 256 "$DIST_DIR/visionem-$VERSION-macos-arm64.tar.gz"
+shasum -a 256 "$DIST_DIR/visionem-dtv-$VERSION-macos-arm64.tar.gz"

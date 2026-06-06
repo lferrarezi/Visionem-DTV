@@ -1,4 +1,4 @@
-# Visionem CLI
+# Visionem DTV CLI
 
 CLI para operar o receptor Siano/Infinitoo TV Digital em macOS user-space.
 
