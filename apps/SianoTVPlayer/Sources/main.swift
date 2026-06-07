@@ -2,6 +2,13 @@ import AppKit
 import AVKit
 import Foundation
 
+private extension NSToolbarItem.Identifier {
+    static let visionemScan = NSToolbarItem.Identifier("visionem.scan")
+    static let visionemStop = NSToolbarItem.Identifier("visionem.stop")
+    static let visionemPIP = NSToolbarItem.Identifier("visionem.pip")
+    static let visionemStatus = NSToolbarItem.Identifier("visionem.status")
+}
+
 struct TVChannel: Codable, Hashable, Sendable {
     let number: Int
     let band: String
@@ -36,7 +43,7 @@ struct TransmissionProbe: Sendable {
 private let minimumPreviewBytes = 160 * 1024
 
 @MainActor
-final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
     private let window: NSWindow
     private let tableView = NSTableView()
     private let statusLabel = NSTextField(labelWithString: "Selecione um canal para assistir")
@@ -78,7 +85,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func configureWindow() {
         window.title = "Visionem DTV"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
         window.minSize = NSSize(width: 960, height: 560)
+        configureToolbar()
 
         let root = NSSplitView()
         root.isVertical = true
@@ -86,13 +97,18 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         root.translatesAutoresizingMaskIntoConstraints = false
 
         let videoPane = NSView()
+        let sidebarEffect = NSVisualEffectView()
         let sidebar = NSView()
         videoPane.wantsLayer = true
         videoPane.layer?.backgroundColor = NSColor.black.cgColor
-        sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = NSColor(calibratedWhite: 0.07, alpha: 1).cgColor
+        sidebarEffect.material = .sidebar
+        sidebarEffect.blendingMode = .behindWindow
+        sidebarEffect.state = .active
+        sidebarEffect.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(videoPane)
-        root.addArrangedSubview(sidebar)
+        root.addArrangedSubview(sidebarEffect)
+        sidebarEffect.addSubview(sidebar)
 
         playerView.controlsStyle = .inline
         playerView.translatesAutoresizingMaskIntoConstraints = false
@@ -116,12 +132,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         tableView.headerView = nil
         tableView.rowHeight = 64
-        tableView.backgroundColor = NSColor(calibratedWhite: 0.07, alpha: 1)
+        tableView.backgroundColor = .clear
         tableView.gridStyleMask = []
         tableView.selectionHighlightStyle = .regular
+        tableView.usesAlternatingRowBackgroundColors = false
         tableView.delegate = self
         tableView.dataSource = self
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("channel"))
@@ -150,16 +168,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         let title = NSTextField(labelWithString: "Visionem DTV")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
-        title.textColor = .white
         title.translatesAutoresizingMaskIntoConstraints = false
         let subtitle = NSTextField(labelWithString: "TV digital brasileira")
         subtitle.font = .systemFont(ofSize: 12, weight: .regular)
-        subtitle.textColor = NSColor(white: 0.68, alpha: 1)
+        subtitle.textColor = .secondaryLabelColor
         subtitle.translatesAutoresizingMaskIntoConstraints = false
 
         sidebar.addSubview(title)
         sidebar.addSubview(subtitle)
-        sidebar.addSubview(controls)
         sidebar.addSubview(scrollView)
 
         window.contentView = NSView()
@@ -172,7 +188,12 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             root.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor),
 
             videoPane.widthAnchor.constraint(greaterThanOrEqualToConstant: 620),
-            sidebar.widthAnchor.constraint(equalToConstant: 320),
+            sidebarEffect.widthAnchor.constraint(equalToConstant: 336),
+
+            sidebar.leadingAnchor.constraint(equalTo: sidebarEffect.leadingAnchor),
+            sidebar.trailingAnchor.constraint(equalTo: sidebarEffect.trailingAnchor),
+            sidebar.topAnchor.constraint(equalTo: sidebarEffect.topAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: sidebarEffect.bottomAnchor),
 
             playerView.leadingAnchor.constraint(equalTo: videoPane.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: videoPane.trailingAnchor),
@@ -196,15 +217,62 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
 
-            controls.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14),
-            controls.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14),
-            controls.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
-
             scrollView.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: controls.bottomAnchor, constant: 12),
+            scrollView.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
             scrollView.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor)
         ])
+    }
+
+    private func configureToolbar() {
+        let toolbar = NSToolbar(identifier: "VisionemDTVToolbar")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.visionemScan, .visionemStop, .flexibleSpace, .visionemStatus, .visionemPIP]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.visionemScan, .visionemStop, .flexibleSpace, .visionemStatus, .visionemPIP]
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        switch itemIdentifier {
+        case .visionemScan:
+            item.label = "Buscar"
+            item.paletteLabel = "Buscar"
+            item.toolTip = "Buscar transmissoes brasileiras"
+            item.image = NSImage(systemSymbolName: "dot.radiowaves.left.and.right", accessibilityDescription: "Buscar")
+            item.target = self
+            item.action = #selector(refreshChannels)
+        case .visionemStop:
+            item.label = "Parar"
+            item.paletteLabel = "Parar"
+            item.toolTip = "Parar recepcao"
+            item.image = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Parar")
+            item.target = self
+            item.action = #selector(stopWatching)
+        case .visionemPIP:
+            item.label = "PIP"
+            item.paletteLabel = "PIP"
+            item.toolTip = "Abrir picture in picture"
+            item.image = NSImage(systemSymbolName: "pip.enter", accessibilityDescription: "PIP")
+            item.target = self
+            item.action = #selector(togglePIP)
+        case .visionemStatus:
+            let label = NSTextField(labelWithString: "ISDB-Tb Brasil")
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            label.textColor = .secondaryLabelColor
+            item.view = label
+        default:
+            return nil
+        }
+        return item
     }
 
     private func loadChannels() {
@@ -275,10 +343,28 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
         tableView.reloadData()
         scanButton.isEnabled = false
-        statusLabel.stringValue = "Atualizando canais..."
-        detailLabel.stringValue = "Executando scan-br; isso pode levar cerca de 1 minuto"
+        statusLabel.stringValue = "Procurando transmissao ativa..."
+        detailLabel.stringValue = "Primeiro teste: MPEG-TS ja entregue pelo firmware"
 
         DispatchQueue.global(qos: .userInitiated).async {
+            if let activeTransmission = Self.detectCurrentTransmission(binary: binary, probeSeconds: 20),
+               activeTransmission.hasVideo {
+                DispatchQueue.main.async {
+                    self.scanProcess = nil
+                    self.channels.removeAll()
+                    for (index, serviceName) in activeTransmission.serviceNames.enumerated() {
+                        self.applyScanResult(Self.currentStreamPlaceholder(name: serviceName, index: index))
+                    }
+                    self.scanButton.isEnabled = true
+                    self.persistChannels()
+                    self.statusLabel.stringValue = "Transmissao ativa encontrada"
+                    let suffix = self.channels.count == 1 ? "servico detectado" : "servicos detectados"
+                    self.detailLabel.stringValue = "\(self.channels.count) \(suffix) no fluxo atual"
+                    self.autoStartCurrentStreamIfAvailable()
+                }
+                return
+            }
+
             let process = Process()
             let output = Pipe()
             process.executableURL = URL(fileURLWithPath: binary)
@@ -298,7 +384,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     .split(separator: "\n")
                     .compactMap { parseScanLine(String($0)) }
                     .filter { $0.demodLocked == true }
-                let currentTransmission = Self.detectCurrentTransmission(binary: binary)
+                let currentTransmission = Self.detectCurrentTransmission(binary: binary, probeSeconds: 12)
                 DispatchQueue.main.async {
                     self.scanProcess = nil
                     self.channels.removeAll()
@@ -618,12 +704,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         cell.subviews.forEach { $0.removeFromSuperview() }
 
         let channel = channels[row]
-        cell.wantsLayer = true
-        cell.layer?.backgroundColor = NSColor(calibratedWhite: 0.07, alpha: 1).cgColor
+        cell.wantsLayer = false
         let title = NSTextField(labelWithString: channel.title)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         if channel.number <= 0 {
-            title.textColor = NSColor(calibratedRed: 0.42, green: 0.92, blue: 0.74, alpha: 1)
+            title.textColor = .controlAccentColor
         } else if channel.demodLocked == true {
             title.textColor = .systemGreen
         } else if channel.rfLocked == true {
@@ -631,11 +716,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         } else if channel.rfLocked == false {
             title.textColor = .secondaryLabelColor
         } else {
-            title.textColor = .white
+            title.textColor = .labelColor
         }
         let subtitle = NSTextField(labelWithString: channel.subtitle)
         subtitle.font = .systemFont(ofSize: 12)
-        subtitle.textColor = NSColor(white: 0.68, alpha: 1)
+        subtitle.textColor = .secondaryLabelColor
         let stack = NSStackView(views: [title, subtitle])
         stack.orientation = .vertical
         stack.spacing = 3
@@ -861,14 +946,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    nonisolated private static func detectCurrentTransmission(binary: String) -> TransmissionProbe? {
+    nonisolated private static func detectCurrentTransmission(binary: String, probeSeconds: Int) -> TransmissionProbe? {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("siano-tv-current-stream-\(UUID().uuidString).ts")
         defer { try? FileManager.default.removeItem(at: outputURL) }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["dump-ts", "12", outputURL.path]
+        process.arguments = ["dump-ts", "\(probeSeconds)", outputURL.path]
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         do {
@@ -876,7 +961,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         } catch {
             return nil
         }
-        let deadline = Date().addingTimeInterval(15)
+        let deadline = Date().addingTimeInterval(TimeInterval(probeSeconds + 3))
         while process.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
