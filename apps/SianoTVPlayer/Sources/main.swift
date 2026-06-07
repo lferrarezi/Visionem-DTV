@@ -378,7 +378,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             let process = Process()
             let output = Pipe()
             process.executableURL = URL(fileURLWithPath: binary)
-            process.arguments = ["scan-br"]
+            process.arguments = ["scan-br-smart"]
             process.standardOutput = output
             process.standardError = output
 
@@ -386,7 +386,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 try process.run()
                 DispatchQueue.main.async {
                     self.scanProcess = process
-                    self.setState(.scanning, "Varrendo canais brasileiros...", "Executando scan-br")
+                    self.setState(.scanning, "Varrendo canais brasileiros...", "Executando scan-br-smart")
                 }
                 process.waitUntilExit()
                 let data = output.fileHandleForReading.readDataToEndOfFile()
