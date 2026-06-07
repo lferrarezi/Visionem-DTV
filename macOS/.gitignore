@@ -1,0 +1,10 @@
+.DS_Store
+build/
+apps/**/.build/
+captures/
+*.ts
+*.m2ts
+*.log
+firmware/*.inp
+dist/
+reference/
