@@ -46,6 +46,17 @@ enum TransmissionProbeResult: Sendable {
     case none
 }
 
+enum ReceiverState: String {
+    case idle = "Pronto"
+    case probing = "Procurando TS ativo"
+    case scanning = "Varrendo canais"
+    case watching = "Sintonizando"
+    case streaming = "Recebendo transmissao"
+    case deviceBusy = "Dispositivo ocupado"
+    case noSignal = "Sem transmissao"
+    case error = "Falha"
+}
+
 private let minimumPreviewBytes = 160 * 1024
 
 @MainActor
@@ -54,11 +65,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private let tableView = NSTableView()
     private let statusLabel = NSTextField(labelWithString: "Selecione um canal para assistir")
     private let detailLabel = NSTextField(labelWithString: "Visionem DTV - ISDB-Tb Brasil")
+    private let diagnosticsLabel = NSTextField(labelWithString: "USB: aguardando | TS: 0 bytes | Estado: pronto")
     private let playerView = AVPlayerView()
     private let frameView = NSImageView()
-    private let scanButton = NSButton(title: "Buscar", target: nil, action: nil)
-    private let stopButton = NSButton(title: "Parar", target: nil, action: nil)
-    private let pipButton = NSButton(title: "PIP", target: nil, action: nil)
+    private var scanToolbarItem: NSToolbarItem?
     private var pipWindow: NSPanel?
     private let pipImageView = NSImageView()
     private var channels: [TVChannel] = []
@@ -66,11 +76,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var watchProcess: Process?
     private var watchOutputPipe: Pipe?
     private var currentOutputURL: URL?
-    private var currentChannelNumber: Int?
     private var playbackTimer: Timer?
     private var frameTimer: Timer?
     private var isExtractingFrame = false
-    private var fallbackDumpStarted = false
+    private var receiverState: ReceiverState = .idle
 
     override init() {
         window = NSWindow(
@@ -155,23 +164,6 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         tableView.addTableColumn(column)
         scrollView.documentView = tableView
 
-        scanButton.target = self
-        scanButton.action = #selector(refreshChannels)
-        stopButton.target = self
-        stopButton.action = #selector(stopWatching)
-        pipButton.target = self
-        pipButton.action = #selector(togglePIP)
-        [scanButton, stopButton, pipButton].forEach { button in
-            button.bezelStyle = .texturedRounded
-            button.controlSize = .large
-        }
-
-        let controls = NSStackView(views: [scanButton, stopButton, pipButton])
-        controls.orientation = .horizontal
-        controls.distribution = .fillEqually
-        controls.spacing = 8
-        controls.translatesAutoresizingMaskIntoConstraints = false
-
         let title = NSTextField(labelWithString: "Visionem DTV")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
         title.translatesAutoresizingMaskIntoConstraints = false
@@ -179,9 +171,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         subtitle.font = .systemFont(ofSize: 12, weight: .regular)
         subtitle.textColor = .secondaryLabelColor
         subtitle.translatesAutoresizingMaskIntoConstraints = false
+        diagnosticsLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        diagnosticsLabel.textColor = .secondaryLabelColor
+        diagnosticsLabel.lineBreakMode = .byTruncatingMiddle
+        diagnosticsLabel.translatesAutoresizingMaskIntoConstraints = false
 
         sidebar.addSubview(title)
         sidebar.addSubview(subtitle)
+        sidebar.addSubview(diagnosticsLabel)
         sidebar.addSubview(scrollView)
 
         window.contentView = NSView()
@@ -222,10 +219,13 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            diagnosticsLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            diagnosticsLabel.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            diagnosticsLabel.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 10),
 
             scrollView.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
+            scrollView.topAnchor.constraint(equalTo: diagnosticsLabel.bottomAnchor, constant: 12),
             scrollView.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor)
         ])
     }
@@ -256,6 +256,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             item.image = NSImage(systemSymbolName: "dot.radiowaves.left.and.right", accessibilityDescription: "Buscar")
             item.target = self
             item.action = #selector(refreshChannels)
+            scanToolbarItem = item
         case .visionemStop:
             item.label = "Parar"
             item.paletteLabel = "Parar"
@@ -282,15 +283,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func loadChannels() {
-        statusLabel.stringValue = "Carregando canais salvos..."
+        setState(.idle, "Carregando canais salvos...", "Visionem DTV - ISDB-Tb Brasil")
         channels = loadSavedChannels()
         tableView.reloadData()
         if channels.isEmpty {
-            statusLabel.stringValue = "Nenhum canal salvo"
-            detailLabel.stringValue = "Primeira execucao; iniciando varredura brasileira"
+            setState(.probing, "Nenhum canal salvo", "Primeira execucao; iniciando busca brasileira")
             startScan()
         } else {
-            detailLabel.stringValue = "\(channels.count) canais salvos"
+            setState(.idle, "Selecione um canal", "\(channels.count) canais salvos")
         }
     }
 
@@ -308,8 +308,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
         statusLabel.isHidden = false
         detailLabel.isHidden = false
-        statusLabel.stringValue = "Limpando lista..."
-        detailLabel.stringValue = "A varredura sera executada do zero"
+        setState(.probing, "Limpando lista...", "A busca sera executada do zero")
     }
 
     @objc func stopWatching() {
@@ -325,16 +324,13 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         watchOutputPipe?.fileHandleForReading.readabilityHandler = nil
         watchOutputPipe = nil
         currentOutputURL = nil
-        currentChannelNumber = nil
-        fallbackDumpStarted = false
         playerView.player?.pause()
         playerView.player = nil
         frameView.image = nil
         pipImageView.image = nil
         statusLabel.isHidden = false
         detailLabel.isHidden = false
-        statusLabel.stringValue = "Parado"
-        detailLabel.stringValue = "Selecione um canal para assistir"
+        setState(.idle, "Parado", "Selecione um canal para assistir")
     }
 
     private func startScan() {
@@ -348,9 +344,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             TVChannel(number: $0.number, band: $0.band, frequency: $0.frequency, name: $0.name, rfLocked: nil, demodLocked: nil, scanStatus: "aguardando")
         }
         tableView.reloadData()
-        scanButton.isEnabled = false
-        statusLabel.stringValue = "Procurando transmissao ativa..."
-        detailLabel.stringValue = "Primeiro teste: MPEG-TS ja entregue pelo firmware"
+        setSearchEnabled(false)
+        setState(.probing, "Procurando transmissao ativa...", "Primeiro teste: MPEG-TS ja entregue pelo firmware")
 
         DispatchQueue.global(qos: .userInitiated).async {
             switch Self.detectCurrentTransmission(binary: binary, probeSeconds: 20) {
@@ -361,20 +356,19 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     for (index, serviceName) in activeTransmission.serviceNames.enumerated() {
                         self.applyScanResult(Self.currentStreamPlaceholder(name: serviceName, index: index))
                     }
-                    self.scanButton.isEnabled = true
+                    self.setSearchEnabled(true)
                     self.persistChannels()
-                    self.statusLabel.stringValue = "Transmissao ativa encontrada"
                     let suffix = self.channels.count == 1 ? "servico detectado" : "servicos detectados"
-                    self.detailLabel.stringValue = "\(self.channels.count) \(suffix) no fluxo atual"
+                    self.setState(.streaming, "Transmissao ativa encontrada", "\(self.channels.count) \(suffix) no fluxo atual")
+                    self.updateDiagnostics(bytes: activeTransmission.bytes, note: "TS ativo")
                     self.autoStartCurrentStreamIfAvailable()
                 }
                 return
             case .unavailable(let message):
                 DispatchQueue.main.async {
                     self.scanProcess = nil
-                    self.scanButton.isEnabled = true
-                    self.statusLabel.stringValue = "Dispositivo ocupado"
-                    self.detailLabel.stringValue = message
+                    self.setSearchEnabled(true)
+                    self.setState(.deviceBusy, "Dispositivo ocupado", message)
                 }
                 return
             case .found, .none:
@@ -392,6 +386,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 try process.run()
                 DispatchQueue.main.async {
                     self.scanProcess = process
+                    self.setState(.scanning, "Varrendo canais brasileiros...", "Executando scan-br")
                 }
                 process.waitUntilExit()
                 let data = output.fileHandleForReading.readDataToEndOfFile()
@@ -412,30 +407,42 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                             self.applyScanResult(Self.currentStreamPlaceholder(name: serviceName, index: index))
                         }
                     }
-                    self.scanButton.isEnabled = true
+                    self.setSearchEnabled(true)
                     self.persistChannels()
                     if case .unavailable(let message) = currentTransmission {
-                        self.statusLabel.stringValue = "Dispositivo ocupado"
-                        self.detailLabel.stringValue = message
+                        self.setState(.deviceBusy, "Dispositivo ocupado", message)
                     } else if self.channels.isEmpty {
-                        self.statusLabel.stringValue = "Nenhuma transmissao encontrada"
-                        self.detailLabel.stringValue = "A busca so lista canais com TS, video e nome de servico confirmados"
+                        self.setState(.noSignal, "Nenhuma transmissao encontrada", "A busca so lista canais com TS, video e nome de servico confirmados")
                     } else {
-                        self.statusLabel.stringValue = "Busca concluida"
                         let suffix = self.channels.count == 1 ? "transmissao encontrada" : "transmissoes encontradas"
-                        self.detailLabel.stringValue = "\(self.channels.count) \(suffix)"
+                        self.setState(.idle, "Busca concluida", "\(self.channels.count) \(suffix)")
                     }
                     self.autoStartCurrentStreamIfAvailable()
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.scanProcess = nil
-                    self.scanButton.isEnabled = true
-                    self.statusLabel.stringValue = "Falha ao atualizar"
-                    self.detailLabel.stringValue = error.localizedDescription
+                    self.setSearchEnabled(true)
+                    self.setState(.error, "Falha ao atualizar", error.localizedDescription)
                 }
             }
         }
+    }
+
+    private func setSearchEnabled(_ enabled: Bool) {
+        scanToolbarItem?.isEnabled = enabled
+    }
+
+    private func setState(_ state: ReceiverState, _ status: String, _ detail: String) {
+        receiverState = state
+        statusLabel.stringValue = status
+        detailLabel.stringValue = detail
+        updateDiagnostics(note: detail)
+    }
+
+    private func updateDiagnostics(bytes: Int? = nil, note: String? = nil) {
+        let byteText = bytes.map { "\($0) bytes" } ?? "0 bytes"
+        diagnosticsLabel.stringValue = "USB: receptor | TS: \(byteText) | Estado: \(receiverState.rawValue)\(note.map { " | \($0)" } ?? "")"
     }
 
     private func autoStartCurrentStreamIfAvailable() {
@@ -482,15 +489,13 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
         tableView.reloadData()
         persistChannels()
-        statusLabel.stringValue = "Canal \(updated.number): \(updated.scanStatus ?? "testado")"
-        detailLabel.stringValue = updated.subtitle
+        setState(receiverState, "Canal \(updated.number): \(updated.scanStatus ?? "testado")", updated.subtitle)
     }
 
     private func startWatching(_ channel: TVChannel) {
         stopWatching()
         let outputURL = captureURL(for: channel.number)
         currentOutputURL = outputURL
-        currentChannelNumber = channel.number
         try? FileManager.default.removeItem(at: outputURL)
         try? FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
@@ -500,50 +505,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return
         }
 
-        fallbackDumpStarted = false
         if channel.number <= 0 {
-            fallbackDumpStarted = true
             runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
         } else {
-            runWatchProcess(binary: binary, arguments: ["watch-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
+            runWatchProcess(binary: binary, arguments: ["recover-ts-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
         }
-    }
-
-    private func shouldStartWithDump(binary: String) -> Bool {
-        let version = runShortCommand(binary: binary, arguments: ["version"])
-        if version.exitCode == 0 {
-            return false
-        }
-        return isMDTVPresent(binary: binary)
-    }
-
-    private func isMDTVPresent(binary: String) -> Bool {
-        let state = runShortCommand(binary: binary, arguments: ["usb-state"])
-        return state.output.contains("mdtv=1")
-    }
-
-    private func runShortCommand(binary: String, arguments: [String]) -> (exitCode: Int32, output: String) {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            let deadline = Date().addingTimeInterval(4)
-            while process.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.05)
-            }
-            if process.isRunning {
-                process.terminate()
-            }
-            process.waitUntilExit()
-        } catch {
-            return (1, error.localizedDescription)
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
     private func runWatchProcess(binary: String, arguments: [String], outputURL: URL, channel: TVChannel, isFallback: Bool) {
@@ -570,22 +536,19 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 pipe.fileHandleForReading.readabilityHandler = nil
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size < 188 * 20 {
-                    self.statusLabel.stringValue = "Sem stream MPEG-TS"
-                    self.detailLabel.stringValue = channel.number <= 0
+                    self.setState(.noSignal, "Sem stream MPEG-TS", channel.number <= 0
                         ? "Ajuste a posicao do dongle e tente novamente"
-                        : "Nao foi possivel sintonizar este canal fisico agora"
+                        : "Nao foi possivel sintonizar este canal fisico agora")
                 }
             }
         }
 
         do {
             try process.run()
-            statusLabel.stringValue = isFallback ? "Lendo stream MPEG-TS..." : "Sintonizando \(channel.title)..."
-            detailLabel.stringValue = isFallback ? outputURL.path : channel.subtitle
+            setState(.watching, isFallback ? "Lendo stream MPEG-TS..." : "Sintonizando \(channel.title)...", isFallback ? outputURL.path : channel.subtitle)
             schedulePlaybackProbe(outputURL, channelNumber: channel.number)
         } catch {
-            statusLabel.stringValue = isFallback ? "Falha no fallback TS" : "Falha ao iniciar recepcao"
-            detailLabel.stringValue = error.localizedDescription
+            setState(.error, isFallback ? "Falha no fallback TS" : "Falha ao iniciar recepcao", error.localizedDescription)
         }
     }
 
@@ -594,9 +557,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard let line = lines.last else { return }
         if line.contains("bytes=") {
             detailLabel.stringValue = line.trimmingCharacters(in: .whitespaces)
+            updateDiagnostics(note: detailLabel.stringValue)
         } else if line.contains("demod lock") {
-            statusLabel.stringValue = "Sinal digital travado"
-            detailLabel.stringValue = line.trimmingCharacters(in: .whitespaces)
+            setState(.watching, "Sinal digital travado", line.trimmingCharacters(in: .whitespaces))
         } else if line.contains("final bytes") {
             detailLabel.stringValue = line.trimmingCharacters(in: .whitespaces)
         } else if line.contains("failed") {
@@ -612,15 +575,15 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 if size > minimumPreviewBytes {
                     self.updateChannelNameFromTransportStream(outputURL, channelNumber: channelNumber)
                     self.startFramePreview(outputURL)
-                    self.statusLabel.stringValue = "Recebendo transmissao"
-                    self.detailLabel.stringValue = outputURL.path
+                    self.setState(.streaming, "Recebendo transmissao", outputURL.path)
+                    self.updateDiagnostics(bytes: size, note: "preview ativo")
                     self.playbackTimer?.invalidate()
                     self.playbackTimer = nil
                 } else {
                     self.statusLabel.isHidden = false
                     self.detailLabel.isHidden = false
-                    self.statusLabel.stringValue = "Aguardando video..."
-                    self.detailLabel.stringValue = "Recebendo TS; aguardando pacotes de video suficientes"
+                    self.setState(.watching, "Aguardando video...", "Recebendo TS; aguardando pacotes de video suficientes")
+                    self.updateDiagnostics(bytes: size)
                 }
             }
         }
@@ -757,52 +720,6 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let row = tableView.selectedRow
         guard row >= 0 && row < channels.count else { return }
         startWatching(channels[row])
-    }
-
-    private func runChannelsCommand(extended: Bool) -> [TVChannel] {
-        guard let binary = findSianoTVBinary() else { return [] }
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = [extended ? "channels-br-extended" : "channels-br"]
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return []
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
-        return output.split(separator: "\n").compactMap(parseChannelLine)
-    }
-
-    private func parseChannelLine(_ line: Substring) -> TVChannel? {
-        let text = String(line)
-        guard text.contains("canal="), text.contains("freq=") else { return nil }
-        let parts = text.split(separator: " ")
-        var number: Int?
-        var bandParts: [String] = []
-        var frequency: Int?
-        var readingBand = false
-        for rawPart in parts {
-            let part = String(rawPart)
-            if part.hasPrefix("canal=") {
-                number = Int(part.dropFirst("canal=".count))
-                readingBand = false
-            } else if part.hasPrefix("faixa=") {
-                bandParts = [String(part.dropFirst("faixa=".count))]
-                readingBand = true
-            } else if part.hasPrefix("freq=") {
-                frequency = Int(part.dropFirst("freq=".count))
-                readingBand = false
-            } else if readingBand {
-                bandParts.append(part)
-            }
-        }
-        guard let number, let frequency else { return nil }
-        return TVChannel(number: number, band: bandParts.joined(separator: " "), frequency: frequency, name: nil, rfLocked: nil, demodLocked: nil, scanStatus: nil)
     }
 
     private func captureURL(for channel: Int) -> URL {

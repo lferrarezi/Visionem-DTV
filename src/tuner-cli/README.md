@@ -25,6 +25,7 @@ Comandos esperados:
 ./build/siano-tv channels-br
 ./build/siano-tv channels-br-extended
 ./build/siano-tv scan-br
+./build/siano-tv scan-br-smart
 ./build/siano-tv scan-br-extended
 ./build/siano-tv diag-br 23 2 captures/diag-canal-23.csv
 ./build/siano-tv debug-channel-br 23 5
@@ -48,6 +49,8 @@ O comando abre `187f:0202`, faz claim da interface `0` e libera a interface sem 
 No firmware oficial ISDB-Tb deste receptor, o fluxo TS tambem pode chegar como `MSG_SMS_DAB_CHANNEL` (`607`) com payload alinhado em pacotes de 188 bytes. `watch-br` e `dump-ts` tratam esse tipo como TS.
 
 `scan-br` cobre a canalizacao brasileira padrao 1-59. `scan-br-extended` cobre 1-69 para investigacao historica ou diagnostica.
+
+`scan-br-smart` testa offsets finos e modos 13seg/1seg/3seg por canal, retornando o melhor score de recepcao por canal. `recover-ts-br <canal> [seconds] [out.ts]` usa preparacao experimental, autotune, filtros PID e stream kicks para tentar recuperar MPEG-TS quando `watch-br` nao entrega bytes.
 
 `diag-br` testa offsets finos e modos `1seg`, `13seg` e `3seg`, gravando CSV para comparar combinacoes.
 

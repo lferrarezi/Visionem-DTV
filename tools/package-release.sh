@@ -25,7 +25,7 @@ mkdir -p "$PKG_DIR/bin" "$PKG_DIR/firmware" "$PKG_DIR/docs" "$PKG_DIR/tools" "$P
 cp build/siano-tv "$PKG_DIR/bin/"
 cp README.md VERSION "$PKG_DIR/"
 cp docs/*.md "$PKG_DIR/docs/"
-cp tools/install-local.sh tools/fetch-siano-firmware.sh tools/import-official-linux-firmware.sh tools/build-gui-installer.sh tools/create-app-icon.swift "$PKG_DIR/tools/"
+cp tools/install-local.sh tools/fetch-siano-firmware.sh tools/import-official-linux-firmware.sh tools/build-gui-installer.sh tools/validate-release.sh tools/create-app-icon.swift "$PKG_DIR/tools/"
 cp assets/Visionem.icns "$PKG_DIR/assets/"
 mkdir -p "$PKG_DIR/apps/SianoTVPlayer/Sources"
 cp apps/SianoTVPlayer/Package.swift "$PKG_DIR/apps/SianoTVPlayer/"

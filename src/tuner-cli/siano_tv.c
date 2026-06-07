@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|watch-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-smart|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|watch-br <canal_fisico> [seconds] [out.ts]|recover-ts-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -1578,6 +1578,93 @@ static int scan_br_command(void) {
     return scan_br_range_command(BR_SCAN_MAX_CHANNEL, "scan-br");
 }
 
+static int scan_br_smart_command(void) {
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fprintf(stderr, "scan-br-smart failed: %s\n", error);
+        return 1;
+    }
+
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc != 0) {
+        smsusb_close(&device, error, sizeof(error));
+        fprintf(stderr, "scan-br-smart failed: %s\n", error);
+        return 1;
+    }
+
+    const uint32_t modes[] = {SMS_BW_ISDBT_13SEG, SMS_BW_ISDBT_1SEG, SMS_BW_ISDBT_3SEG};
+    const int offsets[] = {0, -125000, 125000, -250000, 250000};
+    int demod_locks = 0;
+    printf("siano-tv scan-br-smart\n");
+    printf("  sistema: ISDB-Tb Brasil, canais 1-59, modos 13seg/1seg/3seg, offsets finos\n");
+    for (unsigned int ch = BR_SCAN_MIN_CHANNEL; ch <= BR_SCAN_MAX_CHANNEL; ch++) {
+        uint32_t center = br_channel_frequency(ch);
+        if (!center) {
+            continue;
+        }
+        int best_score = -2147483647;
+        uint32_t best_mode = SMS_BW_ISDBT_13SEG;
+        uint32_t best_freq = center;
+        sms_isdbt_stats_summary_t best_stats;
+        memset(&best_stats, 0, sizeof(best_stats));
+
+        for (size_t mode_i = 0; mode_i < sizeof(modes) / sizeof(modes[0]); mode_i++) {
+            for (size_t offset_i = 0; offset_i < sizeof(offsets) / sizeof(offsets[0]); offset_i++) {
+                uint32_t freq = (uint32_t)((int64_t)center + offsets[offset_i]);
+                char local_error[256];
+                rc = smsusb_tune_isdbt_segment(&device, freq, modes[mode_i], local_error, sizeof(local_error));
+                if (rc != 0) {
+                    continue;
+                }
+                usleep(350000);
+                sms_isdbt_stats_summary_t stats;
+                rc = smsusb_get_isdbt_stats_ex(&device, &stats, local_error, sizeof(local_error));
+                if (rc != 0) {
+                    rc = smsusb_get_isdbt_stats(&device, &stats, local_error, sizeof(local_error));
+                }
+                if (rc != 0) {
+                    continue;
+                }
+                int score = stats_score(&stats);
+                if (score > best_score) {
+                    best_score = score;
+                    best_mode = modes[mode_i];
+                    best_freq = freq;
+                    best_stats = stats;
+                }
+                if (stats.is_demod_locked) {
+                    break;
+                }
+            }
+            if (best_stats.is_demod_locked) {
+                break;
+            }
+        }
+
+        if (best_stats.is_demod_locked) {
+            demod_locks++;
+        }
+        printf("  canal=%u faixa=%s freq=%u mode=%s rf=%u demod=%u snr=%d power=%d score=%d status=%s\n",
+               ch,
+               br_channel_band(ch),
+               best_freq,
+               segment_name(best_mode),
+               best_stats.is_rf_locked,
+               best_stats.is_demod_locked,
+               best_stats.snr,
+               best_stats.in_band_power,
+               best_score,
+               best_stats.is_demod_locked ? "pronto_para_imagem" : (best_stats.is_rf_locked ? "portadora_sem_demod" : "sem_lock"));
+        fflush(stdout);
+    }
+
+    smsusb_close(&device, error, sizeof(error));
+    printf("  demod locks: %d\n", demod_locks);
+    return demod_locks > 0 ? 0 : 1;
+}
+
 static int scan_br_extended_command(void) {
     return scan_br_range_command(BR_SCAN_EXTENDED_MAX_CHANNEL, "scan-br-extended");
 }
@@ -1965,6 +2052,40 @@ static int watch_br_command(int argc, char **argv) {
     return watch_isdbt_frequency(frequency, seconds, out_path);
 }
 
+static int recover_ts_br_command(int argc, char **argv) {
+    unsigned long channel = 0;
+    if (parse_ulong_arg(argv[2], BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
+        fprintf(stderr, "recover-ts-br failed: canal fisico deve estar entre 1 e 69\n");
+        return 2;
+    }
+
+    unsigned long seconds = 300;
+    if (argc >= 4 && parse_ulong_arg(argv[3], 1, 3600, &seconds) != 0) {
+        fprintf(stderr, "recover-ts-br failed: seconds invalido\n");
+        return 2;
+    }
+
+    char default_path[256];
+    mkdir("captures", 0755);
+    snprintf(default_path, sizeof(default_path), "captures/recover-br-canal-%lu.ts", channel);
+    const char *out_path = argc >= 5 ? argv[4] : default_path;
+    uint32_t frequency = br_channel_frequency((unsigned int)channel);
+    if (!frequency) {
+        fprintf(stderr, "recover-ts-br failed: canal fisico fora da canalizacao conhecida\n");
+        return 2;
+    }
+
+    setenv("SIANO_TV_EXPERIMENTAL_PREP", "1", 0);
+    setenv("SIANO_TV_STREAM_KICK_BEFORE_TUNE", "enable-ts", 0);
+    setenv("SIANO_TV_STREAM_KICK_BEFORE_PID", "enable-ts,data-pump", 0);
+    setenv("SIANO_TV_STREAM_KICK", "enable-ts,data-pump", 0);
+    printf("siano-tv recover-ts-br\n");
+    printf("  canal: %lu\n", channel);
+    printf("  frequency: %u Hz\n", frequency);
+    printf("  estrategia: prep experimental, autotune, filtros PID, stream kicks\n");
+    return watch_isdbt_frequency(frequency, seconds, out_path);
+}
+
 static int pid_list_br_command(const char *channel_text) {
     unsigned long channel = 0;
     if (parse_ulong_arg(channel_text, BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
@@ -2202,6 +2323,9 @@ int main(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "scan-br") == 0) {
         return scan_br_command();
     }
+    if (argc == 2 && strcmp(argv[1], "scan-br-smart") == 0) {
+        return scan_br_smart_command();
+    }
     if (argc == 2 && strcmp(argv[1], "scan-br-extended") == 0) {
         return scan_br_extended_command();
     }
@@ -2222,6 +2346,9 @@ int main(int argc, char **argv) {
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
         return watch_br_command(argc, argv);
+    }
+    if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "recover-ts-br") == 0) {
+        return recover_ts_br_command(argc, argv);
     }
     if (argc == 3 && strcmp(argv[1], "firmware-load") == 0) {
         return firmware_load_command(argv[2]);
