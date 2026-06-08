@@ -105,7 +105,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func configureWindow() {
         window.title = appTitle
-        window.titleVisibility = .hidden
+        window.titleVisibility = .visible
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
         window.minSize = NSSize(width: 960, height: 560)
