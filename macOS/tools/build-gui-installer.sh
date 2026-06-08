@@ -6,6 +6,7 @@ export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(cat "$ROOT_DIR/VERSION")"
 DIST_DIR="$ROOT_DIR/dist"
+WORKSPACE_DIST_DIR="$(cd "$ROOT_DIR/.." && pwd)/dist"
 PKGROOT="${TMPDIR:-/tmp}/visionem-dtv-pkgroot-$VERSION"
 CLEAN_PKGROOT="${TMPDIR:-/tmp}/visionem-dtv-pkgroot-clean-$VERSION"
 PKG_SCRIPTS="${TMPDIR:-/tmp}/visionem-dtv-pkg-scripts-$VERSION"
@@ -184,4 +185,7 @@ if pkgutil --payload-files "$FINAL_PKG" | grep -E '(^|/)\._|(^|/)\.__' >/dev/nul
 fi
 
 shasum -a 256 "$FINAL_PKG"
+mkdir -p "$WORKSPACE_DIST_DIR"
+cp "$FINAL_PKG" "$WORKSPACE_DIST_DIR/"
+shasum -a 256 "$WORKSPACE_DIST_DIR/$(basename "$FINAL_PKG")"
 echo "$FINAL_PKG"
