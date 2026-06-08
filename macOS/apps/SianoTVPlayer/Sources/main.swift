@@ -58,6 +58,7 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
+private let fallbackAppVersion = "1.8.0"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -80,6 +81,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var frameTimer: Timer?
     private var isExtractingFrame = false
     private var receiverState: ReceiverState = .idle
+    private var appTitle: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return "Visionem DTV - \(version ?? fallbackAppVersion)"
+    }
 
     override init() {
         window = NSWindow(
@@ -99,7 +104,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func configureWindow() {
-        window.title = "Visionem DTV"
+        window.title = appTitle
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
@@ -164,7 +169,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         tableView.addTableColumn(column)
         scrollView.documentView = tableView
 
-        let title = NSTextField(labelWithString: "Visionem DTV")
+        let title = NSTextField(labelWithString: appTitle)
         title.font = .systemFont(ofSize: 20, weight: .semibold)
         title.translatesAutoresizingMaskIntoConstraints = false
         let subtitle = NSTextField(labelWithString: "TV digital brasileira")
