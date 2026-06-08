@@ -58,7 +58,7 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let fallbackAppVersion = "1.8.0"
+private let fallbackAppVersion = "1.8.1"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -67,6 +67,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private let statusLabel = NSTextField(labelWithString: "Selecione um canal para assistir")
     private let detailLabel = NSTextField(labelWithString: "Visionem DTV - ISDB-Tb Brasil")
     private let diagnosticsLabel = NSTextField(labelWithString: "USB: aguardando | TS: 0 bytes | Estado: pronto")
+    private let usbIndicatorDot = NSView()
+    private let usbIndicatorLabel = NSTextField(labelWithString: "Receptor USB: verificando")
     private let playerView = AVPlayerView()
     private let frameView = NSImageView()
     private var scanToolbarItem: NSToolbarItem?
@@ -81,6 +83,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var frameTimer: Timer?
     private var isExtractingFrame = false
     private var receiverState: ReceiverState = .idle
+    private var isReceiverConnected = false
     private var appTitle: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         return "Visionem DTV - \(version ?? fallbackAppVersion)"
@@ -96,6 +99,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         super.init()
         configureWindow()
         loadChannels()
+        refreshUSBIndicator()
     }
 
     func show() {
@@ -180,9 +184,23 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         diagnosticsLabel.textColor = .secondaryLabelColor
         diagnosticsLabel.lineBreakMode = .byTruncatingMiddle
         diagnosticsLabel.translatesAutoresizingMaskIntoConstraints = false
+        usbIndicatorDot.wantsLayer = true
+        usbIndicatorDot.layer?.cornerRadius = 4.5
+        usbIndicatorDot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        usbIndicatorDot.translatesAutoresizingMaskIntoConstraints = false
+        usbIndicatorLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        usbIndicatorLabel.textColor = .secondaryLabelColor
+        usbIndicatorLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let usbIndicatorStack = NSStackView(views: [usbIndicatorDot, usbIndicatorLabel])
+        usbIndicatorStack.orientation = .horizontal
+        usbIndicatorStack.alignment = .centerY
+        usbIndicatorStack.spacing = 7
+        usbIndicatorStack.translatesAutoresizingMaskIntoConstraints = false
 
         sidebar.addSubview(title)
         sidebar.addSubview(subtitle)
+        sidebar.addSubview(usbIndicatorStack)
         sidebar.addSubview(diagnosticsLabel)
         sidebar.addSubview(scrollView)
 
@@ -224,9 +242,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            usbIndicatorDot.widthAnchor.constraint(equalToConstant: 9),
+            usbIndicatorDot.heightAnchor.constraint(equalToConstant: 9),
+            usbIndicatorStack.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            usbIndicatorStack.trailingAnchor.constraint(lessThanOrEqualTo: title.trailingAnchor),
+            usbIndicatorStack.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 10),
             diagnosticsLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             diagnosticsLabel.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            diagnosticsLabel.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 10),
+            diagnosticsLabel.topAnchor.constraint(equalTo: usbIndicatorStack.bottomAnchor, constant: 8),
 
             scrollView.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
@@ -300,6 +323,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     @objc private func refreshChannels() {
+        refreshUSBIndicator()
         stopWatching()
         clearChannelListForFreshScan()
         startScan()
@@ -335,10 +359,12 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         pipImageView.image = nil
         statusLabel.isHidden = false
         detailLabel.isHidden = false
+        refreshUSBIndicator()
         setState(.idle, "Parado", "Selecione um canal para assistir")
     }
 
     private func startScan() {
+        refreshUSBIndicator()
         guard let binary = findSianoTVBinary() else {
             statusLabel.stringValue = "siano-tv nao encontrado"
             detailLabel.stringValue = "Instale o pacote antes de atualizar"
@@ -447,7 +473,48 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func updateDiagnostics(bytes: Int? = nil, note: String? = nil) {
         let byteText = bytes.map { "\($0) bytes" } ?? "0 bytes"
-        diagnosticsLabel.stringValue = "USB: receptor | TS: \(byteText) | Estado: \(receiverState.rawValue)\(note.map { " | \($0)" } ?? "")"
+        let usbText = isReceiverConnected ? "conectado" : "desconectado"
+        diagnosticsLabel.stringValue = "USB: \(usbText) | TS: \(byteText) | Estado: \(receiverState.rawValue)\(note.map { " | \($0)" } ?? "")"
+    }
+
+    private func refreshUSBIndicator() {
+        guard let binary = findSianoTVBinary() else {
+            setUSBIndicator(connected: false, detail: "siano-tv indisponivel")
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: binary)
+            process.arguments = ["usb-state"]
+            process.standardOutput = output
+            process.standardError = output
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                DispatchQueue.main.async {
+                    self.setUSBIndicator(connected: false, detail: "falha ao verificar")
+                }
+                return
+            }
+
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8) ?? ""
+            let connected = text.contains("summary: mdtv=1") || text.contains("mdtv: present")
+            DispatchQueue.main.async {
+                self.setUSBIndicator(connected: connected, detail: connected ? "conectado" : "desconectado")
+            }
+        }
+    }
+
+    private func setUSBIndicator(connected: Bool, detail: String) {
+        isReceiverConnected = connected
+        usbIndicatorDot.layer?.backgroundColor = (connected ? NSColor.systemGreen : NSColor.systemRed).cgColor
+        usbIndicatorLabel.stringValue = connected ? "Receptor USB conectado" : "Receptor USB \(detail)"
+        updateDiagnostics(note: detailLabel.stringValue)
     }
 
     private func autoStartCurrentStreamIfAvailable() {
