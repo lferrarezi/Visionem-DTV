@@ -33,3 +33,6 @@ cd macOS
 
 O projeto iPadOS sera desenvolvido em `iPadOS/`. A premissa inicial e validar se o receptor USB pode ser acessado por APIs publicas do iPadOS ou se sera necessario outro desenho de arquitetura, como ponte externa, firmware intermediario ou streaming por rede.
 
+## Licenca
+
+Este projeto e distribuido sob a licenca MIT. Consulte [LICENSE](LICENSE).

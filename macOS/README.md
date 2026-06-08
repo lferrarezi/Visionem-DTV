@@ -204,3 +204,7 @@ O app `Visionem DTV.app` tem duas areas:
 
 Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv recover-ts-br <canal>`, grava em `~/Movies/SianoTV/` e inicia a exibicao quando houver MPEG-TS. Enquanto `demod=0` ou `bytes=0`, ele mostra estado de espera em vez de fingir imagem. A lista de canais e persistida localmente e os nomes sao preenchidos a partir dos metadados do TS quando disponiveis.
 - `firmware`: instrucoes para obter firmware; blobs binarios nao sao versionados por padrao.
+
+## Licenca
+
+Este projeto e distribuido sob a licenca MIT. Consulte [../LICENSE](../LICENSE).
