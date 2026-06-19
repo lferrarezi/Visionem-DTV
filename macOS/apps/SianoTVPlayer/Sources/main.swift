@@ -59,7 +59,7 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let fallbackAppVersion = "1.8.2"
+private let fallbackAppVersion = "1.8.4"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -423,15 +423,12 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 process.waitUntilExit()
                 let data = output.fileHandleForReading.readDataToEndOfFile()
                 let text = String(data: data, encoding: .utf8) ?? ""
-                let scanned = text
-                    .split(separator: "\n")
-                    .compactMap { parseScanLine(String($0)) }
-                    .filter { $0.demodLocked == true }
+                let scanned = Self.detectConfirmedPhysicalChannels(binary: binary, scanText: text)
                 let currentTransmission = Self.detectCurrentTransmission(binary: binary, probeSeconds: 12)
                 DispatchQueue.main.async {
                     self.scanProcess = nil
                     self.channels.removeAll()
-                    for channel in scanned where channel.name != nil && channel.name?.isEmpty == false {
+                    for channel in scanned {
                         self.applyScanResult(channel)
                     }
                     if case .found(let currentTransmission) = currentTransmission, currentTransmission.hasVideo {
@@ -598,7 +595,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if channel.number <= 0 {
             runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
         } else {
-            runWatchProcess(binary: binary, arguments: ["recover-ts-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
+            runWatchProcess(binary: binary, arguments: ["ts-probe-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
         }
     }
 
@@ -833,10 +830,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func findSianoTVBinary() -> String? {
-        let candidates = [
+        var candidates: [String] = []
+        if let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent() {
+            candidates.append(executableDirectory.appendingPathComponent("siano-tv").path)
+        }
+        candidates.append(contentsOf: [
             "/usr/local/bin/siano-tv",
             "\(FileManager.default.currentDirectoryPath)/build/siano-tv"
-        ]
+        ])
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
@@ -1022,6 +1023,50 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         return .found(TransmissionProbe(serviceNames: serviceNames, hasVideo: hasVideoStream(in: outputURL), bytes: size))
     }
 
+    nonisolated private static func detectConfirmedPhysicalChannels(binary: String, scanText: String) -> [TVChannel] {
+        let candidates = scanText
+            .split(separator: "\n")
+            .compactMap { parseScanCandidate(String($0)) }
+            .filter { $0.channel.rfLocked == true }
+            .sorted {
+                if $0.channel.number == 18 { return true }
+                if $1.channel.number == 18 { return false }
+                return $0.power > $1.power
+            }
+            .prefix(6)
+
+        var confirmed: [TVChannel] = []
+        for candidate in candidates {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("visionem-dtv-scan-canal-\(candidate.channel.number)-\(UUID().uuidString).ts")
+            defer { try? FileManager.default.removeItem(at: outputURL) }
+
+            let result = runSianoTV(
+                binary: binary,
+                arguments: ["ts-probe-br", "\(candidate.channel.number)", "12", outputURL.path],
+                timeout: 22
+            )
+            let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard result.status == 0 || size > minimumPreviewBytes else { continue }
+            let names = detectServiceNames(in: outputURL)
+            guard !names.isEmpty, hasVideoStream(in: outputURL) else { continue }
+
+            for (index, name) in names.enumerated() {
+                let number = index == 0 ? candidate.channel.number : -(candidate.channel.number * 100 + index)
+                confirmed.append(TVChannel(
+                    number: number,
+                    band: index == 0 ? candidate.channel.band : "servico do canal \(candidate.channel.number)",
+                    frequency: candidate.channel.frequency,
+                    name: name,
+                    rfLocked: true,
+                    demodLocked: true,
+                    scanStatus: "ts_confirmado"
+                ))
+            }
+        }
+        return confirmed
+    }
+
     nonisolated private static func runSianoTV(binary: String, arguments: [String], timeout: TimeInterval) -> (status: Int32, output: String) {
         let process = Process()
         let pipe = Pipe()
@@ -1130,6 +1175,19 @@ func parseScanLine(_ text: String) -> TVChannel? {
     }
     guard let number, let frequency else { return nil }
     return TVChannel(number: number, band: bandParts.joined(separator: " "), frequency: frequency, name: nil, rfLocked: rf, demodLocked: demod, scanStatus: status)
+}
+
+func parseScanCandidate(_ text: String) -> (channel: TVChannel, power: Int)? {
+    guard let channel = parseScanLine(text) else { return nil }
+    var power = Int.min
+    for rawPart in text.split(separator: " ") {
+        let part = String(rawPart)
+        if part.hasPrefix("power="), let value = Int(part.dropFirst("power=".count)) {
+            power = value
+            break
+        }
+    }
+    return (channel, power)
 }
 
 let app = NSApplication.shared

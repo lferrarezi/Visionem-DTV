@@ -93,6 +93,7 @@ exec "$DIR/SianoTVPlayer"
 SCRIPT
 chmod 0755 "$APP_DIR/Contents/MacOS/visionem-launcher"
 install -m 0755 "$ROOT_DIR/build/SianoTVPlayer" "$APP_DIR/Contents/MacOS/SianoTVPlayer"
+install -m 0755 "$ROOT_DIR/build/siano-tv" "$APP_DIR/Contents/MacOS/siano-tv"
 install -m 0644 "$APP_ICON" "$APP_DIR/Contents/Resources/Visionem.icns"
 codesign --force --deep --sign - "$PKGROOT/Applications/$APP_NAME.app" >/dev/null
 dot_clean -m "$PKGROOT" >/dev/null 2>&1 || true
