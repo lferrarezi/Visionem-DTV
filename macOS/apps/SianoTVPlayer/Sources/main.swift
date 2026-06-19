@@ -59,7 +59,7 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let fallbackAppVersion = "1.8.4"
+private let fallbackAppVersion = "1.8.5"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -82,6 +82,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var currentOutputURL: URL?
     private var playbackTimer: Timer?
     private var frameTimer: Timer?
+    private var framePreviewStartedAt: Date?
     private var isExtractingFrame = false
     private var receiverState: ReceiverState = .idle
     private var isReceiverConnected = false
@@ -473,6 +474,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let lowercased = message.lowercased()
         if lowercased.contains("ocupado") || lowercased.contains("libusb_error_access") {
             setState(.deviceBusy, "Dispositivo ocupado", message)
+        } else if Self.indicatesUnresponsiveReceiver(message) {
+            setState(.error, "Receptor sem resposta", message)
         } else if lowercased.contains("nao encontrado") ||
                     lowercased.contains("não encontrado") ||
                     lowercased.contains("desconectado") ||
@@ -678,6 +681,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func startFramePreview(_ outputURL: URL) {
         frameTimer?.invalidate()
+        framePreviewStartedAt = Date()
         renderFrame(from: outputURL)
         frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -689,6 +693,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func renderFrame(from outputURL: URL) {
         guard !isExtractingFrame else { return }
         isExtractingFrame = true
+        let elapsed = framePreviewStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let preferredOffset = max(1, Int(elapsed.rounded(.down)) - 1)
         let frameURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("visionem-dtv-frame-\(UUID().uuidString).jpg")
         DispatchQueue.global(qos: .utility).async {
@@ -704,7 +710,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 }
                 return
             }
-            guard Self.extractFrame(ffmpeg: ffmpeg, inputURL: outputURL, outputURL: frameURL),
+            guard Self.extractFrame(ffmpeg: ffmpeg, inputURL: outputURL, outputURL: frameURL, preferredOffset: preferredOffset),
                   let image = NSImage(contentsOf: frameURL) else {
                 return
             }
@@ -717,11 +723,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
     }
 
-    nonisolated private static func extractFrame(ffmpeg: String, inputURL: URL, outputURL: URL) -> Bool {
+    nonisolated private static func extractFrame(ffmpeg: String, inputURL: URL, outputURL: URL, preferredOffset: Int) -> Bool {
+        let offset = max(1, preferredOffset)
+        let previousOffset = max(1, offset - 2)
         let attempts: [[String]] = [
-            [],
-            ["-ss", "2"],
-            ["-ss", "5"],
+            ["-fflags", "+discardcorrupt", "-err_detect", "ignore_err", "-ss", "\(offset)"],
+            ["-ss", "\(offset)"],
+            ["-fflags", "+discardcorrupt", "-err_detect", "ignore_err", "-ss", "\(previousOffset)"],
+            ["-ss", "\(previousOffset)"],
             ["-fflags", "+discardcorrupt", "-err_detect", "ignore_err"]
         ]
         for prefix in attempts {
@@ -1012,6 +1021,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             if text.contains("LIBUSB_ERROR_ACCESS") {
                 return .unavailable("O receptor esta ocupado por outro processo. Feche o Visionem DTV antigo ou finalize processos siano-tv e tente Buscar novamente.")
             }
+            if indicatesUnresponsiveReceiver(text) {
+                return .unavailable("O receptor esta conectado, mas nao respondeu ao transporte USB. Reconecte fisicamente o dongle e tente Buscar novamente. Diagnostico: \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
+            }
             if text.contains("not found") || text.contains("not openable") {
                 return .unavailable("Receptor USB nao encontrado ou nao abriu. Reconecte o dongle e tente novamente.")
             }
@@ -1065,6 +1077,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             }
         }
         return confirmed
+    }
+
+    nonisolated private static func indicatesUnresponsiveReceiver(_ text: String) -> Bool {
+        let lowercased = text.lowercased()
+        return lowercased.contains("libusb_error_timeout") ||
+            lowercased.contains("bulk out failed") ||
+            lowercased.contains("timeout waiting for response") ||
+            lowercased == "timeout"
     }
 
     nonisolated private static func runSianoTV(binary: String, arguments: [String], timeout: TimeInterval) -> (status: Int32, output: String) {
