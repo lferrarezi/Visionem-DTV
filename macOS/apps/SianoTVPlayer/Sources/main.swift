@@ -60,7 +60,7 @@ enum ReceiverState: String {
 
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 700 * 1024
-private let fallbackAppVersion = "1.8.9"
+private let fallbackAppVersion = "1.9.0"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -87,6 +87,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var hlsProcess: Process?
     private var hlsDirectoryURL: URL?
     private var hlsPlaylistURL: URL?
+    private var audioProcess: Process?
     private var framePreviewStartedAt: Date?
     private var isExtractingFrame = false
     private var receiverState: ReceiverState = .idle
@@ -354,6 +355,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         frameTimer = nil
         hlsPlaybackTimer?.invalidate()
         hlsPlaybackTimer = nil
+        stopExternalAudioPlayback()
         isExtractingFrame = false
         scanProcess?.terminate()
         scanProcess = nil
@@ -720,6 +722,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                         self.setState(.streaming, "Recebendo transmissao", outputURL.path)
                     }
                     let segmentCount = self.hlsDirectoryURL.map { Self.hlsSegmentCount(in: $0) } ?? 0
+                    if size > minimumHLSStartBytes {
+                        self.startExternalAudioPlayback(outputURL)
+                    }
                     if let playlistURL = self.hlsPlaylistURL,
                        size > minimumHLSStartBytes,
                        FileManager.default.fileExists(atPath: playlistURL.path),
@@ -805,6 +810,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func activateHLSPlayback(_ playlistURL: URL) {
         let player = AVPlayer(url: playlistURL)
+        player.isMuted = true
         playerView.player = player
         player.play()
         frameTimer?.invalidate()
@@ -814,6 +820,39 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         detailLabel.isHidden = true
         updateDiagnostics(note: "HLS audio/video ativo")
         hlsPlaybackTimer = nil
+    }
+
+
+    private func startExternalAudioPlayback(_ outputURL: URL) {
+        guard audioProcess == nil else { return }
+        guard let ffplay = Self.findExecutable(["/opt/homebrew/bin/ffplay", "/usr/local/bin/ffplay"]) else {
+            updateDiagnostics(note: "ffplay nao encontrado para audio externo")
+            return
+        }
+        let logURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("visionem-dtv-audio-\(UUID().uuidString).log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let command = "/usr/bin/tail -c +1 -f \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffplay)) -hide_banner -loglevel warning -nodisp -vn -f mpegts -"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
+        process.standardOutput = try? FileHandle(forWritingTo: logURL)
+        process.standardError = process.standardOutput
+        do {
+            try process.run()
+            audioProcess = process
+            updateDiagnostics(note: "audio externo ativo")
+        } catch {
+            updateDiagnostics(note: "falha audio externo: \(error.localizedDescription)")
+        }
+    }
+
+    private func stopExternalAudioPlayback() {
+        if let process = audioProcess {
+            Self.terminateProcessTree(process.processIdentifier)
+            process.terminate()
+        }
+        audioProcess = nil
     }
 
     private func stopHLSPlayback() {
