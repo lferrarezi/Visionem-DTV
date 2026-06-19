@@ -264,6 +264,9 @@ static int ensure_parent_directory(const char *path) {
 }
 
 static FILE *open_output_file(const char *path) {
+    if (strcmp(path, "-") == 0) {
+        return stdout;
+    }
     ensure_parent_directory(path);
     return fopen(path, "wb");
 }
@@ -2109,6 +2112,8 @@ static int ts_probe_br_command(int argc, char **argv) {
         return 2;
     }
 
+    int raw_stdout = strcmp(out_path, "-") == 0;
+    FILE *log = raw_stdout ? stderr : stdout;
     FILE *out = open_output_file(out_path);
     if (!out) {
         fprintf(stderr, "ts-probe-br failed: could not open %s: %s\n", out_path, strerror(errno));
@@ -2139,14 +2144,14 @@ static int ts_probe_br_command(int argc, char **argv) {
         return 1;
     }
 
-    printf("siano-tv ts-probe-br\n");
-    printf("  canal: %lu\n", channel);
-    printf("  frequency: %u Hz\n", frequency);
-    printf("  mode: %s\n", segment_name(selected_mode));
-    printf("  duration: %lu seconds\n", seconds);
-    printf("  output: %s\n", out_path);
-    printf("  pid: %s\n", getenv("SIANO_TV_TS_PROBE_PID") ? getenv("SIANO_TV_TS_PROBE_PID") : "none");
-    printf("  kick: %s\n", getenv("SIANO_TV_TS_PROBE_KICK") ? getenv("SIANO_TV_TS_PROBE_KICK") : "none");
+    fprintf(log, "siano-tv ts-probe-br\n");
+    fprintf(log, "  canal: %lu\n", channel);
+    fprintf(log, "  frequency: %u Hz\n", frequency);
+    fprintf(log, "  mode: %s\n", segment_name(selected_mode));
+    fprintf(log, "  duration: %lu seconds\n", seconds);
+    fprintf(log, "  output: %s\n", out_path);
+    fprintf(log, "  pid: %s\n", getenv("SIANO_TV_TS_PROBE_PID") ? getenv("SIANO_TV_TS_PROBE_PID") : "none");
+    fprintf(log, "  kick: %s\n", getenv("SIANO_TV_TS_PROBE_KICK") ? getenv("SIANO_TV_TS_PROBE_KICK") : "none");
 
     int locked = 0;
     time_t lock_deadline = time(NULL) + 8;
@@ -2158,7 +2163,7 @@ static int ts_probe_br_command(int argc, char **argv) {
         }
         if (stats_rc == 0 && stats.is_demod_locked) {
             locked = 1;
-            printf("  demod lock: rf=%u demod=%u snr=%d rssi=%d power=%d layers=%u\n",
+            fprintf(log, "  demod lock: rf=%u demod=%u snr=%d rssi=%d power=%d layers=%u\n",
                    stats.is_rf_locked,
                    stats.is_demod_locked,
                    stats.snr,
@@ -2170,21 +2175,21 @@ static int ts_probe_br_command(int argc, char **argv) {
         usleep(250000);
     }
     if (!locked) {
-        printf("  demod lock: nao confirmado; entrando em leitura silenciosa mesmo assim\n");
+        fprintf(log, "  demod lock: nao confirmado; entrando em leitura silenciosa mesmo assim\n");
     }
 
     const char *pid_mode = getenv("SIANO_TV_TS_PROBE_PID");
     if (pid_mode && strcmp(pid_mode, "all") == 0) {
         rc = smsusb_add_pid_filter(&device, 0x2000, error, sizeof(error));
-        printf("  pid all-pass: %s%s%s\n", rc == 0 ? "ok" : "erro", rc == 0 ? "" : " ", rc == 0 ? "" : error);
+        fprintf(log, "  pid all-pass: %s%s%s\n", rc == 0 ? "ok" : "erro", rc == 0 ? "" : " ", rc == 0 ? "" : error);
     } else if (pid_mode && strcmp(pid_mode, "watch") == 0) {
         rc = install_watch_pids(&device, error, sizeof(error));
-        printf("  pid watch: %s%s%s\n", rc == 0 ? "ok" : "erro", rc == 0 ? "" : " ", rc == 0 ? "" : error);
+        fprintf(log, "  pid watch: %s%s%s\n", rc == 0 ? "ok" : "erro", rc == 0 ? "" : " ", rc == 0 ? "" : error);
     }
     run_stream_kicks(&device, getenv("SIANO_TV_TS_PROBE_KICK"));
 
-    printf("  leitura silenciosa: sem polling de stats durante a captura\n");
-    fflush(stdout);
+    fprintf(log, "  leitura silenciosa: sem polling de stats durante a captura\n");
+    fflush(log);
 
     unsigned long messages = 0;
     unsigned long ts_messages = 0;
@@ -2222,7 +2227,7 @@ static int ts_probe_br_command(int argc, char **argv) {
             } else {
                 non_ts_messages++;
                 if (non_ts_messages <= 12 || (non_ts_messages % 25) == 0) {
-                    printf("  raw msg type=%u %s length=%u src=%u dst=%u flags=0x%04x\n",
+                    fprintf(log, "  raw msg type=%u %s length=%u src=%u dst=%u flags=0x%04x\n",
                            header->msg_type,
                            msg_name(header->msg_type),
                            header->msg_length,
@@ -2235,31 +2240,36 @@ static int ts_probe_br_command(int argc, char **argv) {
 
         time_t now = time(NULL);
         if (now >= next_report) {
-            printf("  t=%lds messages=%lu ts_messages=%lu non_ts=%lu timeouts=%lu bytes=%lu\n",
+            fprintf(log, "  t=%lds messages=%lu ts_messages=%lu non_ts=%lu timeouts=%lu bytes=%lu\n",
                    (long)(now - start),
                    messages,
                    ts_messages,
                    non_ts_messages,
                    timeouts,
                    (unsigned long)total);
-            fflush(stdout);
+            fflush(log);
             next_report = now + 1;
         }
     }
 
     close_device_preserving_error(&device, error, sizeof(error));
-    fclose(out);
+    if (raw_stdout) {
+        fflush(out);
+    } else {
+        fclose(out);
+    }
     if (rc != 0) {
         fprintf(stderr, "ts-probe-br failed: %s\n", error);
         return 1;
     }
 
-    printf("  final messages=%lu ts_messages=%lu non_ts=%lu timeouts=%lu bytes=%lu\n",
+    fprintf(log, "  final messages=%lu ts_messages=%lu non_ts=%lu timeouts=%lu bytes=%lu\n",
            messages,
            ts_messages,
            non_ts_messages,
            timeouts,
            (unsigned long)total);
+    fflush(log);
     return total > 0 ? 0 : 1;
 }
 
@@ -2384,6 +2394,8 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
         return 2;
     }
 
+    int raw_stdout = strcmp(out_path, "-") == 0;
+    FILE *log = raw_stdout ? stderr : stdout;
     FILE *out = open_output_file(out_path);
     if (!out) {
         fprintf(stderr, "dump-ts failed: could not open %s: %s\n", out_path, strerror(errno));
@@ -2394,15 +2406,17 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
     char error[256];
     int rc = smsusb_open(&device, error, sizeof(error));
     if (rc != 0) {
-        fclose(out);
+        if (!raw_stdout) {
+            fclose(out);
+        }
         fprintf(stderr, "dump-ts failed: %s\n", error);
         return 1;
     }
 
-    printf("siano-tv dump-ts\n");
-    printf("  duration: %lu seconds\n", seconds);
-    printf("  output: %s\n", out_path);
-    fflush(stdout);
+    fprintf(log, "siano-tv dump-ts\n");
+    fprintf(log, "  duration: %lu seconds\n", seconds);
+    fprintf(log, "  output: %s\n", out_path);
+    fflush(log);
 
     unsigned long messages = 0;
     unsigned long timeouts = 0;
@@ -2430,6 +2444,7 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
                     rc = -1;
                     break;
                 }
+                fflush(out);
                 total += payload_len;
             }
             messages++;
@@ -2437,24 +2452,29 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
 
         time_t now = time(NULL);
         if (now >= next_stats) {
-            printf("  t=%lds messages=%lu timeouts=%lu bytes=%lu\n",
+            fprintf(log, "  t=%lds messages=%lu timeouts=%lu bytes=%lu\n",
                    (long)(now - start),
                    messages,
                    timeouts,
                    (unsigned long)total);
-            fflush(stdout);
+            fflush(log);
             next_stats = now + 1;
         }
     }
 
     close_device_preserving_error(&device, error, sizeof(error));
-    fclose(out);
+    if (raw_stdout) {
+        fflush(out);
+    } else {
+        fclose(out);
+    }
     if (rc != 0) {
         fprintf(stderr, "dump-ts failed: %s\n", error);
         return 1;
     }
 
-    printf("  final bytes: %lu\n", (unsigned long)total);
+    fprintf(log, "  final bytes: %lu\n", (unsigned long)total);
+    fflush(log);
     return total > 0 ? 0 : 1;
 }
 

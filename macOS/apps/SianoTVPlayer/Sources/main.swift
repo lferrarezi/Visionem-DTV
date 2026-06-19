@@ -59,7 +59,8 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let fallbackAppVersion = "1.8.8"
+private let minimumHLSStartBytes = 700 * 1024
+private let fallbackAppVersion = "1.8.9"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -85,6 +86,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var hlsPlaybackTimer: Timer?
     private var hlsProcess: Process?
     private var hlsDirectoryURL: URL?
+    private var hlsPlaylistURL: URL?
     private var framePreviewStartedAt: Date?
     private var isExtractingFrame = false
     private var receiverState: ReceiverState = .idle
@@ -352,14 +354,17 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         frameTimer = nil
         hlsPlaybackTimer?.invalidate()
         hlsPlaybackTimer = nil
-        stopHLSPlayback()
         isExtractingFrame = false
         scanProcess?.terminate()
         scanProcess = nil
-        watchProcess?.terminate()
-        watchProcess = nil
         watchOutputPipe?.fileHandleForReading.readabilityHandler = nil
         watchOutputPipe = nil
+        if let process = watchProcess {
+            Self.terminateProcessTree(process.processIdentifier)
+            process.terminate()
+        }
+        watchProcess = nil
+        stopHLSPlayback()
         currentOutputURL = nil
         playerView.player?.pause()
         playerView.player = nil
@@ -602,22 +607,52 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
 
         if isCurrentStreamChannel(channel) {
-            runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
+            runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", "-"], outputURL: outputURL, channel: channel, isFallback: true)
         } else {
             let physicalChannel = physicalChannelNumber(for: channel)
-            runWatchProcess(binary: binary, arguments: ["ts-probe-br", "\(physicalChannel)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
+            runWatchProcess(binary: binary, arguments: ["ts-probe-br", "\(physicalChannel)", "3600", "-"], outputURL: outputURL, channel: channel, isFallback: false)
         }
     }
 
     private func runWatchProcess(binary: String, arguments: [String], outputURL: URL, channel: TVChannel, isFallback: Bool) {
+        guard let ffmpeg = Self.findExecutable(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) else {
+            setState(.error, "ffmpeg nao encontrado", "Instale ffmpeg para audio/video continuo")
+            return
+        }
+
+        stopHLSPlayback()
+        let hlsDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("visionem-dtv-hls-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: hlsDir, withIntermediateDirectories: true)
+        } catch {
+            setState(.error, "Falha ao preparar HLS", error.localizedDescription)
+            return
+        }
+
+        let playlistURL = hlsDir.appendingPathComponent("live.m3u8")
+        let segmentPattern = hlsDir.appendingPathComponent("segment-%03d.ts").path
+        let cliLogURL = hlsDir.appendingPathComponent("siano-tv.log")
+        let ffmpegLogURL = hlsDir.appendingPathComponent("ffmpeg.log")
+        FileManager.default.createFile(atPath: cliLogURL.path, contents: nil)
+        FileManager.default.createFile(atPath: ffmpegLogURL.path, contents: nil)
+
+        let sourceCommand = ([binary] + arguments).map(Self.shellQuote).joined(separator: " ")
+        let command = [
+            "set -o pipefail",
+            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 10000000 -analyzeduration 10000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
+        ].joined(separator: "; ")
+
         let process = Process()
         let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = arguments
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
         process.standardOutput = pipe
         process.standardError = pipe
         watchProcess = process
         watchOutputPipe = pipe
+        hlsDirectoryURL = hlsDir
+        hlsPlaylistURL = playlistURL
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -638,12 +673,12 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                         self.playbackTimer = nil
                         self.watchProcess = nil
                         try? FileManager.default.removeItem(at: outputURL)
-                        self.runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
+                        self.runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", "-"], outputURL: outputURL, channel: channel, isFallback: true)
                         return
                     }
-                    self.setState(.noSignal, "Sem stream MPEG-TS", channel.number <= 0
-                        ? "Ajuste a posicao do dongle e tente novamente"
-                        : "Nao foi possivel sintonizar este canal fisico agora")
+                    let ffmpegTail = Self.tailText(ffmpegLogURL, maxBytes: 600)
+                    let cliTail = Self.tailText(cliLogURL, maxBytes: 600)
+                    self.setState(.noSignal, "Sem stream MPEG-TS", "CLI: \(cliTail) | ffmpeg: \(ffmpegTail)")
                 }
             }
         }
@@ -651,6 +686,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         do {
             try process.run()
             setState(.watching, isFallback ? "Lendo stream MPEG-TS..." : "Sintonizando \(channel.title)...", isFallback ? outputURL.path : channel.subtitle)
+            updateDiagnostics(note: "HLS preparando em \(hlsDir.path)")
             schedulePlaybackProbe(outputURL, channelNumber: channel.number)
         } catch {
             setState(.error, isFallback ? "Falha no fallback TS" : "Falha ao iniciar recepcao", error.localizedDescription)
@@ -679,12 +715,21 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size > minimumPreviewBytes {
                     self.updateChannelNameFromTransportStream(outputURL, channelNumber: channelNumber)
-                    self.startHLSPlayback(outputURL)
-                    self.startFramePreview(outputURL)
-                    self.setState(.streaming, "Recebendo transmissao", outputURL.path)
-                    self.updateDiagnostics(bytes: size, note: "player ativo")
-                    self.playbackTimer?.invalidate()
-                    self.playbackTimer = nil
+                    if self.frameTimer == nil && self.playerView.player == nil {
+                        self.startFramePreview(outputURL)
+                        self.setState(.streaming, "Recebendo transmissao", outputURL.path)
+                    }
+                    let segmentCount = self.hlsDirectoryURL.map { Self.hlsSegmentCount(in: $0) } ?? 0
+                    if let playlistURL = self.hlsPlaylistURL,
+                       size > minimumHLSStartBytes,
+                       FileManager.default.fileExists(atPath: playlistURL.path),
+                       segmentCount >= 3 {
+                        self.activateHLSPlayback(playlistURL)
+                        self.playbackTimer?.invalidate()
+                        self.playbackTimer = nil
+                    } else {
+                        self.updateDiagnostics(bytes: size, note: "HLS preparando segmentos=\(segmentCount)")
+                    }
                 } else {
                     self.statusLabel.isHidden = false
                     self.detailLabel.isHidden = false
@@ -781,6 +826,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             try? FileManager.default.removeItem(at: hlsDirectoryURL)
         }
         hlsDirectoryURL = nil
+        hlsPlaylistURL = nil
     }
 
     nonisolated private static func hlsSegmentCount(in directory: URL) -> Int {
@@ -1097,6 +1143,19 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     nonisolated private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    nonisolated private static func tailText(_ url: URL, maxBytes: Int) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return "sem log" }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let start = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+        try? handle.seek(toOffset: start)
+        let data = (try? handle.readToEnd()) ?? Data()
+        return (String(data: data, encoding: .utf8) ?? "log ilegivel")
+            .split(separator: "\n")
+            .suffix(4)
+            .joined(separator: " | ")
     }
 
     nonisolated private static func terminateProcessTree(_ pid: Int32) {
