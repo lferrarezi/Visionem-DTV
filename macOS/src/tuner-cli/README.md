@@ -52,6 +52,8 @@ No firmware oficial ISDB-Tb deste receptor, o fluxo TS tambem pode chegar como `
 
 `scan-br-smart` testa offsets finos e modos 13seg/1seg/3seg por canal, retornando o melhor score de recepcao por canal. `recover-ts-br <canal> [seconds] [out.ts]` usa preparacao experimental, autotune, filtros PID e stream kicks para tentar recuperar MPEG-TS quando `watch-br` nao entrega bytes.
 
+`ts-probe-br <canal> [seconds] [out.ts]` e o caminho de diagnostico mais isolado para entrega de TS: sintoniza, aguarda demod lock e depois le apenas o bulk IN sem consultar estatisticas durante a captura. Por padrao nao instala PID filter e nao envia stream kick. Variaveis opcionais: `SIANO_TV_TS_PROBE_PID=all|watch`, `SIANO_TV_TS_PROBE_KICK=enable-ts,data-pump` e `SIANO_TV_TS_PROBE_PREP=1`.
+
 `diag-br` testa offsets finos e modos `1seg`, `13seg` e `3seg`, gravando CSV para comparar combinacoes.
 
 `debug-channel-br` faz uma leitura fina por canal brasileiro: testa `1seg`, `13seg` e `3seg`, imprime cada mensagem recebida do firmware, resume contagem por tipo, compara estatistica normal e expandida, e indica se algum payload MPEG-TS apareceu.

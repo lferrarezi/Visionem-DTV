@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.8.2`.
+Versao local: `1.8.3`.
 
 ## Estado Atual
 
@@ -62,6 +62,7 @@ Para um teste manual em tempo real enquanto ajusta a antena:
 ./build/siano-tv pid-list-br 23
 ./build/siano-tv stream-kick-br 23 enable-ts
 ./build/siano-tv stats-isdbt-ex 527142857
+./build/siano-tv ts-probe-br 23 60 captures/ts-probe-canal-23.ts
 ./build/siano-tv recover-ts-br 23 300 captures/recover-canal-23.ts
 ./build/siano-tv watch-br 23 300 captures/canal-23.ts
 ```
@@ -73,6 +74,8 @@ O dispositivo informado nao aceita antena externa. Para teste real, mova o dongl
 Se `scan-br` ficar em `rf=1 demod=0`, rode `diag-br` e depois `debug-channel-br`. O `diag-br` testa offsets finos ao redor do centro do canal e variantes `1seg`, `13seg` e `3seg`, gravando CSV. O `debug-channel-br` sintoniza o canal fisico nos tres modos, registra mensagens brutas vindas do dispositivo, compara `GET_STATISTICS` e `GET_STATISTICS_EX`, e mostra se ha pacotes MPEG-TS.
 
 `scan-br-smart` executa uma varredura brasileira focada em recepcao real: testa 13seg/1seg/3seg e offsets finos por canal, reportando o melhor score por canal. `recover-ts-br <canal>` usa a estrategia mais agressiva para assistir: preparacao experimental, autotune, filtros PID e kicks de stream antes de capturar TS.
+
+`ts-probe-br <canal>` e o teste mais conservador para depurar entrega MPEG-TS: depois do demod lock, ele para de consultar estatisticas e fica apenas lendo o endpoint bulk IN. Use esse comando antes de levar qualquer nova estrategia para o aplicativo.
 
 O `watch-br` aplica o MTU `15792` observado no driver Linux oficial para placas ONDA/MDTV, imprime contadores USB (`non_ts` e `timeouts`) e aceita rotas de filtro PID para diagnostico: `SIANO_TV_PID_SRC=<id>` e `SIANO_TV_PID_DST=<id>`. As preparacoes experimentais `1seg-through-fullseg` e `vhf-via-vhf-input` podem ser testadas com `prepare-reception` ou ativadas no fluxo normal com `SIANO_TV_EXPERIMENTAL_PREP=1`.
 
@@ -127,7 +130,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-dtv-1.8.2-macos-installer.pkg
+dist/visionem-dtv-1.8.3-macos-installer.pkg
 ```
 
 O instalador coloca:

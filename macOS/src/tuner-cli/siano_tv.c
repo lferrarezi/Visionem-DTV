@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-smart|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|watch-br <canal_fisico> [seconds] [out.ts]|recover-ts-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-smart|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|watch-br <canal_fisico> [seconds] [out.ts]|recover-ts-br <canal_fisico> [seconds] [out.ts]|ts-probe-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -2086,6 +2086,183 @@ static int recover_ts_br_command(int argc, char **argv) {
     return watch_isdbt_frequency(frequency, seconds, out_path);
 }
 
+static int ts_probe_br_command(int argc, char **argv) {
+    unsigned long channel = 0;
+    if (parse_ulong_arg(argv[2], BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
+        fprintf(stderr, "ts-probe-br failed: canal fisico deve estar entre 1 e 69\n");
+        return 2;
+    }
+
+    unsigned long seconds = 30;
+    if (argc >= 4 && parse_ulong_arg(argv[3], 1, 3600, &seconds) != 0) {
+        fprintf(stderr, "ts-probe-br failed: seconds invalido\n");
+        return 2;
+    }
+
+    char default_path[256];
+    mkdir("captures", 0755);
+    snprintf(default_path, sizeof(default_path), "captures/ts-probe-br-canal-%lu.ts", channel);
+    const char *out_path = argc >= 5 ? argv[4] : default_path;
+    uint32_t frequency = br_channel_frequency((unsigned int)channel);
+    if (!frequency) {
+        fprintf(stderr, "ts-probe-br failed: canal fisico fora da canalizacao conhecida\n");
+        return 2;
+    }
+
+    FILE *out = open_output_file(out_path);
+    if (!out) {
+        fprintf(stderr, "ts-probe-br failed: could not open %s: %s\n", out_path, strerror(errno));
+        return 1;
+    }
+
+    smsusb_device_t device;
+    char error[256];
+    int rc = smsusb_open(&device, error, sizeof(error));
+    if (rc != 0) {
+        fclose(out);
+        fprintf(stderr, "ts-probe-br failed: %s\n", error);
+        return 1;
+    }
+
+    uint32_t selected_mode = SMS_BW_ISDBT_13SEG;
+    rc = ensure_isdbt_ready(&device, error, sizeof(error));
+    if (rc == 0 && env_flag_enabled("SIANO_TV_TS_PROBE_PREP")) {
+        prepare_reception_best_effort(&device);
+    }
+    if (rc == 0) {
+        rc = choose_watch_mode(&device, frequency, &selected_mode, error, sizeof(error));
+    }
+    if (rc != 0) {
+        close_device_preserving_error(&device, error, sizeof(error));
+        fclose(out);
+        fprintf(stderr, "ts-probe-br failed: %s\n", error);
+        return 1;
+    }
+
+    printf("siano-tv ts-probe-br\n");
+    printf("  canal: %lu\n", channel);
+    printf("  frequency: %u Hz\n", frequency);
+    printf("  mode: %s\n", segment_name(selected_mode));
+    printf("  duration: %lu seconds\n", seconds);
+    printf("  output: %s\n", out_path);
+    printf("  pid: %s\n", getenv("SIANO_TV_TS_PROBE_PID") ? getenv("SIANO_TV_TS_PROBE_PID") : "none");
+    printf("  kick: %s\n", getenv("SIANO_TV_TS_PROBE_KICK") ? getenv("SIANO_TV_TS_PROBE_KICK") : "none");
+
+    int locked = 0;
+    time_t lock_deadline = time(NULL) + 8;
+    while (time(NULL) < lock_deadline) {
+        sms_isdbt_stats_summary_t stats;
+        int stats_rc = smsusb_get_isdbt_stats_ex(&device, &stats, error, sizeof(error));
+        if (stats_rc != 0) {
+            stats_rc = smsusb_get_isdbt_stats(&device, &stats, error, sizeof(error));
+        }
+        if (stats_rc == 0 && stats.is_demod_locked) {
+            locked = 1;
+            printf("  demod lock: rf=%u demod=%u snr=%d rssi=%d power=%d layers=%u\n",
+                   stats.is_rf_locked,
+                   stats.is_demod_locked,
+                   stats.snr,
+                   stats.rssi,
+                   stats.in_band_power,
+                   stats.num_layers);
+            break;
+        }
+        usleep(250000);
+    }
+    if (!locked) {
+        printf("  demod lock: nao confirmado; entrando em leitura silenciosa mesmo assim\n");
+    }
+
+    const char *pid_mode = getenv("SIANO_TV_TS_PROBE_PID");
+    if (pid_mode && strcmp(pid_mode, "all") == 0) {
+        rc = smsusb_add_pid_filter(&device, 0x2000, error, sizeof(error));
+        printf("  pid all-pass: %s%s%s\n", rc == 0 ? "ok" : "erro", rc == 0 ? "" : " ", rc == 0 ? "" : error);
+    } else if (pid_mode && strcmp(pid_mode, "watch") == 0) {
+        rc = install_watch_pids(&device, error, sizeof(error));
+        printf("  pid watch: %s%s%s\n", rc == 0 ? "ok" : "erro", rc == 0 ? "" : " ", rc == 0 ? "" : error);
+    }
+    run_stream_kicks(&device, getenv("SIANO_TV_TS_PROBE_KICK"));
+
+    printf("  leitura silenciosa: sem polling de stats durante a captura\n");
+    fflush(stdout);
+
+    unsigned long messages = 0;
+    unsigned long ts_messages = 0;
+    unsigned long non_ts_messages = 0;
+    unsigned long timeouts = 0;
+    size_t total = 0;
+    time_t start = time(NULL);
+    time_t next_report = start;
+    time_t end_time = start + (time_t)seconds;
+
+    while (time(NULL) < end_time) {
+        unsigned char raw_message[SIANO_RAW_MESSAGE_SIZE];
+        size_t raw_size = 0;
+        rc = smsusb_read_raw_message(&device, raw_message, sizeof(raw_message), &raw_size, 250, error, sizeof(error));
+        if (rc != 0) {
+            break;
+        }
+        if (raw_size == 0) {
+            timeouts++;
+        } else if (raw_size >= sizeof(sms_msg_hdr_t)) {
+            sms_msg_hdr_t *header = (sms_msg_hdr_t *)raw_message;
+            size_t payload_len = header->msg_length >= sizeof(sms_msg_hdr_t) ? header->msg_length - sizeof(sms_msg_hdr_t) : 0;
+            messages++;
+            if ((header->msg_type == SMS_MSG_DVBT_BDA_DATA || header->msg_type == SMS_MSG_DAB_CHANNEL) &&
+                payload_len > 0 &&
+                (payload_len % 188) == 0) {
+                if (fwrite(raw_message + sizeof(sms_msg_hdr_t), 1, payload_len, out) != payload_len) {
+                    snprintf(error, sizeof(error), "write failed");
+                    rc = -1;
+                    break;
+                }
+                fflush(out);
+                total += payload_len;
+                ts_messages++;
+            } else {
+                non_ts_messages++;
+                if (non_ts_messages <= 12 || (non_ts_messages % 25) == 0) {
+                    printf("  raw msg type=%u %s length=%u src=%u dst=%u flags=0x%04x\n",
+                           header->msg_type,
+                           msg_name(header->msg_type),
+                           header->msg_length,
+                           header->msg_src_id,
+                           header->msg_dst_id,
+                           header->msg_flags);
+                }
+            }
+        }
+
+        time_t now = time(NULL);
+        if (now >= next_report) {
+            printf("  t=%lds messages=%lu ts_messages=%lu non_ts=%lu timeouts=%lu bytes=%lu\n",
+                   (long)(now - start),
+                   messages,
+                   ts_messages,
+                   non_ts_messages,
+                   timeouts,
+                   (unsigned long)total);
+            fflush(stdout);
+            next_report = now + 1;
+        }
+    }
+
+    close_device_preserving_error(&device, error, sizeof(error));
+    fclose(out);
+    if (rc != 0) {
+        fprintf(stderr, "ts-probe-br failed: %s\n", error);
+        return 1;
+    }
+
+    printf("  final messages=%lu ts_messages=%lu non_ts=%lu timeouts=%lu bytes=%lu\n",
+           messages,
+           ts_messages,
+           non_ts_messages,
+           timeouts,
+           (unsigned long)total);
+    return total > 0 ? 0 : 1;
+}
+
 static int pid_list_br_command(const char *channel_text) {
     unsigned long channel = 0;
     if (parse_ulong_arg(channel_text, BR_SCAN_MIN_CHANNEL, BR_SCAN_EXTENDED_MAX_CHANNEL, &channel) != 0) {
@@ -2349,6 +2526,9 @@ int main(int argc, char **argv) {
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "recover-ts-br") == 0) {
         return recover_ts_br_command(argc, argv);
+    }
+    if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "ts-probe-br") == 0) {
+        return ts_probe_br_command(argc, argv);
     }
     if (argc == 3 && strcmp(argv[1], "firmware-load") == 0) {
         return firmware_load_command(argv[2]);
