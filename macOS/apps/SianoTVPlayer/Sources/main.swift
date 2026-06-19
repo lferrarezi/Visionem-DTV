@@ -59,7 +59,7 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let fallbackAppVersion = "1.8.7"
+private let fallbackAppVersion = "1.8.8"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -82,6 +82,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var currentOutputURL: URL?
     private var playbackTimer: Timer?
     private var frameTimer: Timer?
+    private var hlsPlaybackTimer: Timer?
+    private var hlsProcess: Process?
+    private var hlsDirectoryURL: URL?
     private var framePreviewStartedAt: Date?
     private var isExtractingFrame = false
     private var receiverState: ReceiverState = .idle
@@ -347,6 +350,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         playbackTimer = nil
         frameTimer?.invalidate()
         frameTimer = nil
+        hlsPlaybackTimer?.invalidate()
+        hlsPlaybackTimer = nil
+        stopHLSPlayback()
         isExtractingFrame = false
         scanProcess?.terminate()
         scanProcess = nil
@@ -673,9 +679,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size > minimumPreviewBytes {
                     self.updateChannelNameFromTransportStream(outputURL, channelNumber: channelNumber)
+                    self.startHLSPlayback(outputURL)
                     self.startFramePreview(outputURL)
                     self.setState(.streaming, "Recebendo transmissao", outputURL.path)
-                    self.updateDiagnostics(bytes: size, note: "preview ativo")
+                    self.updateDiagnostics(bytes: size, note: "player ativo")
                     self.playbackTimer?.invalidate()
                     self.playbackTimer = nil
                 } else {
@@ -691,12 +698,94 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func startFramePreview(_ outputURL: URL) {
         frameTimer?.invalidate()
         framePreviewStartedAt = Date()
+        frameView.isHidden = false
         renderFrame(from: outputURL)
         frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.renderFrame(from: outputURL)
             }
         }
+    }
+
+    private func startHLSPlayback(_ outputURL: URL) {
+        stopHLSPlayback()
+        guard let ffmpeg = Self.findExecutable(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) else {
+            detailLabel.stringValue = "ffmpeg nao encontrado para audio/video continuo"
+            return
+        }
+
+        let hlsDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("visionem-dtv-hls-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: hlsDir, withIntermediateDirectories: true)
+        } catch {
+            detailLabel.stringValue = "Falha ao preparar HLS: \(error.localizedDescription)"
+            return
+        }
+
+        let playlistURL = hlsDir.appendingPathComponent("live.m3u8")
+        let segmentPattern = hlsDir.appendingPathComponent("segment-%03d.ts").path
+        let logURL = hlsDir.appendingPathComponent("ffmpeg.log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let command = [
+            "/usr/bin/tail -c +1 -f \(Self.shellQuote(outputURL.path))",
+            "\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 10000000 -analyzeduration 10000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path))"
+        ].joined(separator: " | ")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
+        process.standardOutput = try? FileHandle(forWritingTo: logURL)
+        process.standardError = process.standardOutput
+        do {
+            try process.run()
+        } catch {
+            try? FileManager.default.removeItem(at: hlsDir)
+            detailLabel.stringValue = "Falha ao iniciar HLS: \(error.localizedDescription)"
+            return
+        }
+
+        hlsProcess = process
+        hlsDirectoryURL = hlsDir
+        hlsPlaybackTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            if FileManager.default.fileExists(atPath: playlistURL.path),
+               Self.hlsSegmentCount(in: hlsDir) >= 2 {
+                timer.invalidate()
+                DispatchQueue.main.async {
+                    self?.activateHLSPlayback(playlistURL)
+                }
+            }
+        }
+    }
+
+    private func activateHLSPlayback(_ playlistURL: URL) {
+        let player = AVPlayer(url: playlistURL)
+        playerView.player = player
+        player.play()
+        frameTimer?.invalidate()
+        frameTimer = nil
+        frameView.isHidden = true
+        statusLabel.isHidden = true
+        detailLabel.isHidden = true
+        updateDiagnostics(note: "HLS audio/video ativo")
+        hlsPlaybackTimer = nil
+    }
+
+    private func stopHLSPlayback() {
+        if let process = hlsProcess {
+            Self.terminateProcessTree(process.processIdentifier)
+            process.terminate()
+        }
+        hlsProcess = nil
+        if let hlsDirectoryURL {
+            try? FileManager.default.removeItem(at: hlsDirectoryURL)
+        }
+        hlsDirectoryURL = nil
+    }
+
+    nonisolated private static func hlsSegmentCount(in directory: URL) -> Int {
+        let items = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return items.filter { $0.hasPrefix("segment-") && $0.hasSuffix(".ts") }.count
     }
 
     private func renderFrame(from outputURL: URL) {
@@ -1004,6 +1093,20 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     nonisolated private static func findExecutable(_ candidates: [String]) -> String? {
         candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    nonisolated private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    nonisolated private static func terminateProcessTree(_ pid: Int32) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        process.arguments = ["-TERM", "-P", "\(pid)"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try? process.run()
+        process.waitUntilExit()
     }
 
     nonisolated private static func detectCurrentTransmission(binary: String, probeSeconds: Int) -> TransmissionProbeResult {
