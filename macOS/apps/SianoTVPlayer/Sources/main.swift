@@ -54,11 +54,12 @@ enum ReceiverState: String {
     case streaming = "Recebendo transmissao"
     case deviceBusy = "Dispositivo ocupado"
     case noSignal = "Sem transmissao"
+    case disconnected = "Receptor desconectado"
     case error = "Falha"
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let fallbackAppVersion = "1.8.1"
+private let fallbackAppVersion = "1.8.2"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -399,7 +400,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 DispatchQueue.main.async {
                     self.scanProcess = nil
                     self.setSearchEnabled(true)
-                    self.setState(.deviceBusy, "Dispositivo ocupado", message)
+                    self.setUnavailableState(message)
                 }
                 return
             case .found, .none:
@@ -441,7 +442,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     self.setSearchEnabled(true)
                     self.persistChannels()
                     if case .unavailable(let message) = currentTransmission {
-                        self.setState(.deviceBusy, "Dispositivo ocupado", message)
+                        self.setUnavailableState(message)
                     } else if self.channels.isEmpty {
                         self.setState(.noSignal, "Nenhuma transmissao encontrada", "A busca so lista canais com TS, video e nome de servico confirmados")
                     } else {
@@ -469,6 +470,23 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         statusLabel.stringValue = status
         detailLabel.stringValue = detail
         updateDiagnostics(note: detail)
+    }
+
+    private func setUnavailableState(_ message: String) {
+        let lowercased = message.lowercased()
+        if lowercased.contains("ocupado") || lowercased.contains("libusb_error_access") {
+            setState(.deviceBusy, "Dispositivo ocupado", message)
+        } else if lowercased.contains("nao encontrado") ||
+                    lowercased.contains("não encontrado") ||
+                    lowercased.contains("desconectado") ||
+                    lowercased.contains("not found") ||
+                    lowercased.contains("not openable") ||
+                    lowercased.contains("mdtv=0") {
+            setState(.disconnected, "Receptor USB nao detectado", message)
+            setUSBIndicator(connected: false, detail: "desconectado")
+        } else {
+            setState(.error, "Falha ao verificar receptor", message)
+        }
     }
 
     private func updateDiagnostics(bytes: Int? = nil, note: String? = nil) {
@@ -955,6 +973,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     nonisolated private static func detectCurrentTransmission(binary: String, probeSeconds: Int) -> TransmissionProbeResult {
+        let usbState = runSianoTV(binary: binary, arguments: ["usb-state"], timeout: 4)
+        if usbState.output.contains("LIBUSB_ERROR_ACCESS") {
+            return .unavailable("O receptor esta ocupado por outro processo. Feche o Visionem DTV antigo ou finalize processos siano-tv e tente Buscar novamente.")
+        }
+        if !usbState.output.contains("summary: mdtv=1") && !usbState.output.contains("mdtv: present") {
+            return .unavailable("Receptor USB nao encontrado. Reconecte o dongle e tente Buscar novamente. Diagnostico: \(usbState.output.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("siano-tv-current-stream-\(UUID().uuidString).ts")
         defer { try? FileManager.default.removeItem(at: outputURL) }
@@ -994,6 +1020,32 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let serviceNames = detectServiceNames(in: outputURL)
         guard size > minimumPreviewBytes, !serviceNames.isEmpty else { return .none }
         return .found(TransmissionProbe(serviceNames: serviceNames, hasVideo: hasVideoStream(in: outputURL), bytes: size))
+    }
+
+    nonisolated private static func runSianoTV(binary: String, arguments: [String], timeout: TimeInterval) -> (status: Int32, output: String) {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+        } catch {
+            return (-1, error.localizedDescription)
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            return (-2, "timeout")
+        }
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (process.terminationStatus, output)
     }
 
     nonisolated private static func hasVideoStream(in url: URL) -> Bool {
