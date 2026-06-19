@@ -59,7 +59,7 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let fallbackAppVersion = "1.8.5"
+private let fallbackAppVersion = "1.8.7"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -595,10 +595,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return
         }
 
-        if channel.number <= 0 {
+        if isCurrentStreamChannel(channel) {
             runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
         } else {
-            runWatchProcess(binary: binary, arguments: ["ts-probe-br", "\(channel.number)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
+            let physicalChannel = physicalChannelNumber(for: channel)
+            runWatchProcess(binary: binary, arguments: ["ts-probe-br", "\(physicalChannel)", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: false)
         }
     }
 
@@ -626,6 +627,14 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 pipe.fileHandleForReading.readabilityHandler = nil
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size < 188 * 20 {
+                    if !isFallback {
+                        self.playbackTimer?.invalidate()
+                        self.playbackTimer = nil
+                        self.watchProcess = nil
+                        try? FileManager.default.removeItem(at: outputURL)
+                        self.runWatchProcess(binary: binary, arguments: ["dump-ts", "3600", outputURL.path], outputURL: outputURL, channel: channel, isFallback: true)
+                        return
+                    }
                     self.setState(.noSignal, "Sem stream MPEG-TS", channel.number <= 0
                         ? "Ajuste a posicao do dongle e tente novamente"
                         : "Nao foi possivel sintonizar este canal fisico agora")
@@ -820,10 +829,25 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func captureURL(for channel: Int) -> URL {
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
-        if channel <= 0 {
+        if channel <= 0 && channel > -100 {
             return movies.appendingPathComponent("SianoTV/fluxo-\(abs(channel)).ts")
         }
-        return movies.appendingPathComponent("SianoTV/canal-\(channel).ts")
+        return movies.appendingPathComponent("SianoTV/canal-\(physicalChannelNumber(for: channel)).ts")
+    }
+
+    private func isCurrentStreamChannel(_ channel: TVChannel) -> Bool {
+        channel.scanStatus == "stream_atual" || (channel.frequency == 0 && channel.number <= 0 && channel.number > -100)
+    }
+
+    private func physicalChannelNumber(for channel: TVChannel) -> Int {
+        physicalChannelNumber(for: channel.number)
+    }
+
+    private func physicalChannelNumber(for channelNumber: Int) -> Int {
+        if channelNumber < -100 {
+            return abs(channelNumber) / 100
+        }
+        return channelNumber
     }
 
     private static func currentStreamPlaceholder(name: String, index: Int) -> TVChannel {
