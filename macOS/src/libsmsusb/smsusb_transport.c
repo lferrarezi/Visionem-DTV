@@ -59,6 +59,7 @@ int smsusb_open(smsusb_device_t *device, char *error, unsigned long error_len) {
         return -1;
     }
 
+    libusb_set_interface_alt_setting(handle, device->info.interface_number, 0);
     libusb_clear_halt(handle, device->info.endpoint_in);
     libusb_clear_halt(handle, device->info.endpoint_out);
 
@@ -145,6 +146,20 @@ static uint8_t env_u8_or_default(const char *name, uint8_t fallback) {
     return (uint8_t)parsed;
 }
 
+static unsigned int env_uint_or_default(const char *name, unsigned int fallback, unsigned int min, unsigned int max) {
+    const char *value = getenv(name);
+    if (!value || !*value) {
+        return fallback;
+    }
+
+    char *end = NULL;
+    unsigned long parsed = strtoul(value, &end, 0);
+    if (end == value || *end != '\0' || parsed < min || parsed > max) {
+        return fallback;
+    }
+    return (unsigned int)parsed;
+}
+
 static void sms_msg_init_control(sms_msg_hdr_t *header, uint16_t type, uint16_t length) {
     sms_msg_init_ex(
         header,
@@ -156,26 +171,39 @@ static void sms_msg_init_control(sms_msg_hdr_t *header, uint16_t type, uint16_t 
 }
 
 static int smsusb_send(smsusb_device_t *device, const void *buffer, int length, char *error, unsigned long error_len) {
-    int transferred = 0;
     libusb_device_handle *handle = (libusb_device_handle *)device->handle;
-    int rc = libusb_bulk_transfer(
-        handle,
-        device->info.endpoint_out,
-        (unsigned char *)buffer,
-        length,
-        &transferred,
-        1000
-    );
-    if (rc < 0) {
-        set_libusb_error(error, error_len, "bulk OUT failed", rc);
-        return -1;
+    unsigned int timeout_ms = env_uint_or_default("SIANO_TV_BULK_OUT_TIMEOUT_MS", 2500, 100, 30000);
+    unsigned int attempts = env_uint_or_default("SIANO_TV_BULK_OUT_ATTEMPTS", 3, 1, 10);
+    int last_rc = 0;
+    int last_transferred = 0;
+
+    for (unsigned int attempt = 0; attempt < attempts; attempt++) {
+        int transferred = 0;
+        int rc = libusb_bulk_transfer(
+            handle,
+            device->info.endpoint_out,
+            (unsigned char *)buffer,
+            length,
+            &transferred,
+            timeout_ms
+        );
+        if (rc == 0 && transferred == length) {
+            return 0;
+        }
+
+        last_rc = rc;
+        last_transferred = transferred;
+        libusb_clear_halt(handle, device->info.endpoint_out);
+        libusb_clear_halt(handle, device->info.endpoint_in);
     }
-    if (transferred != length) {
-        snprintf(error, error_len, "bulk OUT short write: %d of %d", transferred, length);
+
+    if (last_rc < 0) {
+        set_libusb_error(error, error_len, "bulk OUT failed", last_rc);
         return -1;
     }
 
-    return 0;
+    snprintf(error, error_len, "bulk OUT short write: %d of %d", last_transferred, length);
+    return -1;
 }
 
 static int normalize_received_message(unsigned char *message, int transferred, size_t buffer_len, size_t *size_out, char *error, unsigned long error_len);
