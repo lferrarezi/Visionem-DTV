@@ -60,7 +60,8 @@ enum ReceiverState: String {
 
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 700 * 1024
-private let fallbackAppVersion = "1.9.5"
+private let minimumTSQualityBytes = 256 * 1024
+private let fallbackAppVersion = "1.9.6"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -86,6 +87,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var hlsPlaybackTimer: Timer?
     private var playerReadinessTimer: Timer?
     private var didRunTSQualityCheck = false
+    private var tsQualitySummary: String?
     private var hlsProcess: Process?
     private var hlsDirectoryURL: URL?
     private var hlsPlaylistURL: URL?
@@ -373,6 +375,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         playerReadinessTimer?.invalidate()
         playerReadinessTimer = nil
         didRunTSQualityCheck = false
+        tsQualitySummary = nil
         stopExternalAudioPlayback()
         currentOutputURL = nil
         playerView.player?.pause()
@@ -512,7 +515,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func updateDiagnostics(bytes: Int? = nil, note: String? = nil) {
         let byteText = bytes.map { "\($0) bytes" } ?? "0 bytes"
         let usbText = isReceiverConnected ? "conectado" : "desconectado"
-        diagnosticsLabel.stringValue = "USB: \(usbText) | TS: \(byteText) | Estado: \(receiverState.rawValue)\(note.map { " | \($0)" } ?? "")"
+        let qualityText = tsQualitySummary.map { " | \($0)" } ?? ""
+        diagnosticsLabel.stringValue = "USB: \(usbText) | TS: \(byteText) | Estado: \(receiverState.rawValue)\(note.map { " | \($0)" } ?? "")\(qualityText)"
     }
 
     private func refreshUSBIndicator() {
@@ -663,6 +667,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         hlsDirectoryURL = hlsDir
         hlsPlaylistURL = playlistURL
         didRunTSQualityCheck = false
+        tsQualitySummary = nil
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -726,13 +731,12 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size > minimumPreviewBytes {
                     self.updateChannelNameFromTransportStream(outputURL, channelNumber: channelNumber)
-                    self.startExternalAudioPlayback(outputURL)
                     if self.frameTimer == nil && self.playerView.player == nil {
                         self.startFramePreview(outputURL)
                         self.setState(.streaming, "Recebendo transmissao", outputURL.path)
                     }
                     let segmentCount = self.hlsDirectoryURL.map { Self.hlsSegmentCount(in: $0) } ?? 0
-                    if !self.didRunTSQualityCheck && size > minimumHLSStartBytes {
+                    if !self.didRunTSQualityCheck && size > minimumTSQualityBytes {
                         self.didRunTSQualityCheck = true
                         self.runTSQualityCheck(binary: binary, outputURL: outputURL)
                     }
@@ -776,7 +780,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             let result = Self.runSianoTV(binary: binary, arguments: ["ts-quality", outputURL.path], timeout: 6)
             let summary = Self.summarizeTSQuality(result.output)
             DispatchQueue.main.async {
-                self.updateDiagnostics(note: summary)
+                self.tsQualitySummary = summary
+                self.updateDiagnostics(note: "diagnostico TS atualizado")
             }
         }
     }
@@ -896,7 +901,6 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     let hasVideoSize = item.presentationSize.width > 0 && item.presentationSize.height > 0
                     self.updateDiagnostics(note: "AVPlayer pronto video=\(Int(item.presentationSize.width))x\(Int(item.presentationSize.height))")
                     if hasVideoSize {
-                        self.stopExternalAudioPlayback()
                         self.frameTimer?.invalidate()
                         self.frameTimer = nil
                         self.frameView.isHidden = true
@@ -950,6 +954,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             process.terminate()
         }
         audioProcess = nil
+        Self.terminateMatchingProcesses(["visionem-dtv-audio", "Movies/SianoTV/fluxo-", "ffplay -hide_banner -loglevel warning -volume 100 -nodisp -vn -f mpegts"])
     }
 
     private func stopHLSPlayback() {
@@ -963,6 +968,19 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
         hlsDirectoryURL = nil
         hlsPlaylistURL = nil
+    }
+
+
+    nonisolated private static func terminateMatchingProcesses(_ patterns: [String]) {
+        for pattern in patterns {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            process.arguments = ["-TERM", "-f", pattern]
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            try? process.run()
+            process.waitUntilExit()
+        }
     }
 
     nonisolated private static func hlsSegmentCount(in directory: URL) -> Int {
