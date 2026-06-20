@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.9.6`.
+Versao local: `1.9.7`.
 
 ## Estado Atual
 
@@ -141,7 +141,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-dtv-1.9.6-macos-installer.pkg
+dist/visionem-dtv-1.9.7-macos-installer.pkg
 ```
 
 O instalador coloca:
