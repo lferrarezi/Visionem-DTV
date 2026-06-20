@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.10.1`.
+Versao local: `1.10.2`.
 
 ## Estado Atual
 
@@ -141,7 +141,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-dtv-1.10.1-macos-installer.pkg
+dist/visionem-dtv-1.10.2-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -240,3 +240,9 @@ Este projeto e distribuido sob a licenca MIT. Consulte [../LICENSE](../LICENSE).
 
 - Adiciona filtro `siano-tv ts-filter-media` para reduzir o TS aos PIDs dominantes de audio/video antes do FFmpeg.
 - O app grava o TS bruto para diagnostico, mas reproduz a versao filtrada no pipeline HLS.
+
+
+### 1.10.2
+
+- Video deixa de depender do AVPlayer/HLS e passa a usar frames MJPEG continuos decodificados por FFmpeg dentro da janela.
+- Audio volta a usar HLS sem filtro de PID heuristico, preservando a rota que apresentou som estavel.

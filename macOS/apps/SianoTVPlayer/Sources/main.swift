@@ -61,7 +61,7 @@ enum ReceiverState: String {
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 1400 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.10.1"
+private let fallbackAppVersion = "1.10.2"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -92,6 +92,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var hlsDirectoryURL: URL?
     private var hlsPlaylistURL: URL?
     private var audioProcess: Process?
+    private var mjpegBuffer = Data()
     private var framePreviewStartedAt: Date?
     private var isExtractingFrame = false
     private var receiverState: ReceiverState = .idle
@@ -647,16 +648,16 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let playlistURL = hlsDir.appendingPathComponent("live.m3u8")
         let segmentPattern = hlsDir.appendingPathComponent("segment-%03d.ts").path
         let cliLogURL = hlsDir.appendingPathComponent("siano-tv.log")
-        let filterLogURL = hlsDir.appendingPathComponent("ts-filter.log")
         let ffmpegLogURL = hlsDir.appendingPathComponent("ffmpeg.log")
+        let videoLogURL = hlsDir.appendingPathComponent("video-frames.log")
         FileManager.default.createFile(atPath: cliLogURL.path, contents: nil)
-        FileManager.default.createFile(atPath: filterLogURL.path, contents: nil)
         FileManager.default.createFile(atPath: ffmpegLogURL.path, contents: nil)
+        FileManager.default.createFile(atPath: videoLogURL.path, contents: nil)
 
         let sourceCommand = ([binary] + arguments).map(Self.shellQuote).joined(separator: " ")
         let command = [
             "set -o pipefail",
-            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(binary)) ts-filter-media - - 2>> \(Self.shellQuote(filterLogURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 5000000 -analyzeduration 5000000 -fflags +genpts+discardcorrupt -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 3 -hls_list_size 10 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
+            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | /usr/bin/tee >(\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 5000000 -analyzeduration 5000000 -fflags +genpts+discardcorrupt -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 3 -hls_list_size 10 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -f mpegts -probesize 5000000 -analyzeduration 5000000 -fflags +genpts+discardcorrupt -err_detect ignore_err -i pipe:0 -map 0:v:0 -an -vf fps=15,scale=960:-2 -q:v 5 -f image2pipe -vcodec mjpeg pipe:1 2>> \(Self.shellQuote(videoLogURL.path))"
         ].joined(separator: "; ")
 
         let process = Process()
@@ -664,7 +665,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-lc", command]
         process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardError = Pipe()
         watchProcess = process
         watchOutputPipe = pipe
         hlsDirectoryURL = hlsDir
@@ -674,9 +675,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            guard !data.isEmpty else { return }
             DispatchQueue.main.async {
-                self?.applyWatchOutput(text)
+                self?.appendMJPEGData(data)
             }
         }
 
@@ -704,7 +705,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         do {
             try process.run()
             setState(.watching, isFallback ? "Lendo stream MPEG-TS..." : "Sintonizando \(channel.title)...", isFallback ? outputURL.path : channel.subtitle)
-            updateDiagnostics(note: "Filtro TS + HLS preparando em \(hlsDir.path)")
+            mjpegBuffer.removeAll(keepingCapacity: true)
+            frameView.isHidden = false
+            setState(.streaming, "Recebendo transmissao", "Video direto por frames MJPEG; audio por HLS")
+            updateDiagnostics(note: "MJPEG + HLS preparando em \(hlsDir.path)")
             schedulePlaybackProbe(outputURL, channelNumber: channel.number, binary: binary, channel: channel, isFallback: isFallback)
         } catch {
             setState(.error, isFallback ? "Falha no fallback TS" : "Falha ao iniciar recepcao", error.localizedDescription)
@@ -726,6 +730,31 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }
     }
 
+    private func appendMJPEGData(_ data: Data) {
+        mjpegBuffer.append(data)
+        while let start = Self.findJPEGStart(in: mjpegBuffer),
+              let end = Self.findJPEGEnd(in: mjpegBuffer, after: start + 2) {
+            if start > 0 {
+                mjpegBuffer.removeSubrange(0..<start)
+                continue
+            }
+            let frameEnd = end + 2
+            let frameData = mjpegBuffer.subdata(in: 0..<frameEnd)
+            mjpegBuffer.removeSubrange(0..<frameEnd)
+            if let image = NSImage(data: frameData) {
+                frameView.image = image
+                pipImageView.image = image
+                frameView.isHidden = false
+                statusLabel.isHidden = true
+                detailLabel.isHidden = true
+            }
+        }
+        if mjpegBuffer.count > 2_000_000 {
+            mjpegBuffer.removeAll(keepingCapacity: true)
+        }
+    }
+
+
     private func schedulePlaybackProbe(_ outputURL: URL, channelNumber: Int, binary: String, channel: TVChannel, isFallback: Bool) {
         let startedAt = Date()
         playbackTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -734,25 +763,18 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size > minimumPreviewBytes {
                     self.updateChannelNameFromTransportStream(outputURL, channelNumber: channelNumber)
-                    if self.frameTimer == nil && self.playerView.player == nil {
-                        self.startFramePreview(outputURL)
-                        self.setState(.streaming, "Recebendo transmissao", outputURL.path)
-                    }
                     let segmentCount = self.hlsDirectoryURL.map { Self.hlsSegmentCount(in: $0) } ?? 0
                     if !self.didRunTSQualityCheck && size > minimumTSQualityBytes {
                         self.didRunTSQualityCheck = true
                         self.runTSQualityCheck(binary: binary, outputURL: outputURL)
                     }
                     if let playlistURL = self.hlsPlaylistURL,
-                       size > minimumHLSStartBytes,
+                       self.audioProcess == nil,
                        FileManager.default.fileExists(atPath: playlistURL.path),
-                       segmentCount >= 4 {
-                        self.activateHLSPlayback(playlistURL)
-                        self.playbackTimer?.invalidate()
-                        self.playbackTimer = nil
-                    } else {
-                        self.updateDiagnostics(bytes: size, note: "HLS preparando segmentos=\(segmentCount)")
+                       segmentCount >= 2 {
+                        self.startExternalHLSAudioPlayback(playlistURL)
                     }
+                    self.updateDiagnostics(bytes: size, note: "video MJPEG ativo; audio segmentos=\(segmentCount)")
                 } else {
                     let elapsed = Date().timeIntervalSince(startedAt)
                     if !isFallback && elapsed >= 8 {
@@ -977,6 +999,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func stopHLSPlayback() {
+        stopExternalAudioPlayback()
         if let process = hlsProcess {
             Self.terminateProcessTree(process.processIdentifier)
             process.terminate()
@@ -1000,6 +1023,22 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             try? process.run()
             process.waitUntilExit()
         }
+    }
+
+    nonisolated private static func findJPEGStart(in data: Data) -> Int? {
+        guard data.count >= 2 else { return nil }
+        for index in 0..<(data.count - 1) where data[index] == 0xff && data[index + 1] == 0xd8 {
+            return index
+        }
+        return nil
+    }
+
+    nonisolated private static func findJPEGEnd(in data: Data, after start: Int) -> Int? {
+        guard data.count >= 2, start < data.count - 1 else { return nil }
+        for index in start..<(data.count - 1) where data[index] == 0xff && data[index + 1] == 0xd9 {
+            return index
+        }
+        return nil
     }
 
     nonisolated private static func hlsSegmentCount(in directory: URL) -> Int {
@@ -1485,7 +1524,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = arguments
         process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardError = Pipe()
         do {
             try process.run()
         } catch {
