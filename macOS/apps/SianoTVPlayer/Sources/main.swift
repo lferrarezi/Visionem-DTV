@@ -61,7 +61,7 @@ enum ReceiverState: String {
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 700 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.9.7"
+private let fallbackAppVersion = "1.9.8"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -195,7 +195,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         subtitle.translatesAutoresizingMaskIntoConstraints = false
         diagnosticsLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         diagnosticsLabel.textColor = .secondaryLabelColor
-        diagnosticsLabel.lineBreakMode = .byTruncatingMiddle
+        diagnosticsLabel.lineBreakMode = .byWordWrapping
+        diagnosticsLabel.maximumNumberOfLines = 3
         diagnosticsLabel.translatesAutoresizingMaskIntoConstraints = false
         usbIndicatorDot.wantsLayer = true
         usbIndicatorDot.layer?.cornerRadius = 4.5
@@ -882,9 +883,11 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let item = AVPlayerItem(url: playlistURL)
         let player = AVPlayer(playerItem: item)
         player.isMuted = false
+        player.volume = 1.0
         playerView.player = player
         player.play()
-        updateDiagnostics(note: "HLS ativo; validando video do AVPlayer")
+        startExternalHLSAudioPlayback(playlistURL)
+        updateDiagnostics(note: "HLS ativo; audio AAC validado")
         hlsPlaybackTimer = nil
 
         playerReadinessTimer?.invalidate()
@@ -924,27 +927,39 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
 
-    private func startExternalAudioPlayback(_ outputURL: URL) {
+    private func startExternalHLSAudioPlayback(_ playlistURL: URL) {
         guard audioProcess == nil else { return }
         guard let ffplay = Self.findExecutable(["/opt/homebrew/bin/ffplay", "/usr/local/bin/ffplay"]) else {
-            updateDiagnostics(note: "ffplay nao encontrado para audio externo")
+            updateDiagnostics(note: "audio: AVPlayer somente; ffplay ausente")
             return
         }
         let logURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("visionem-dtv-audio-\(UUID().uuidString).log")
+            .appendingPathComponent("visionem-dtv-hls-audio-\(UUID().uuidString).log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        let command = "/usr/bin/tail -c +1 -f \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffplay)) -hide_banner -loglevel warning -volume 100 -nodisp -vn -f mpegts -"
+        let command = "\(Self.shellQuote(ffplay)) -hide_banner -loglevel warning -nodisp -vn -volume 100 -fflags nobuffer -flags low_delay \(Self.shellQuote(playlistURL.path))"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-lc", command]
         process.standardOutput = try? FileHandle(forWritingTo: logURL)
         process.standardError = process.standardOutput
+        process.terminationHandler = { [weak self] process in
+            let logTail = Self.tailText(logURL, maxBytes: 500)
+            DispatchQueue.main.async {
+                guard let self, self.audioProcess === process else { return }
+                self.audioProcess = nil
+                if logTail.contains("CoreAudio error") || logTail.contains("audio open failed") {
+                    self.updateDiagnostics(note: "CoreAudio sem saida valida; verifique Saida de Som")
+                } else if !logTail.isEmpty {
+                    self.updateDiagnostics(note: "audio externo encerrado: \(logTail)")
+                }
+            }
+        }
         do {
             try process.run()
             audioProcess = process
-            updateDiagnostics(note: "audio externo ativo")
+            updateDiagnostics(note: "audio HLS externo ativo")
         } catch {
-            updateDiagnostics(note: "falha audio externo: \(error.localizedDescription)")
+            updateDiagnostics(note: "falha audio HLS: \(error.localizedDescription)")
         }
     }
 
@@ -954,7 +969,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             process.terminate()
         }
         audioProcess = nil
-        Self.terminateMatchingProcesses(["visionem-dtv-audio", "Movies/SianoTV/fluxo-", "ffplay -hide_banner -loglevel warning -volume 100 -nodisp -vn -f mpegts"])
+        Self.terminateMatchingProcesses(["visionem-dtv-hls-audio", "visionem-dtv-audio", "Movies/SianoTV/fluxo-", "ffplay -hide_banner -loglevel warning -nodisp -vn -volume 100"])
     }
 
     private func stopHLSPlayback() {
