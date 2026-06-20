@@ -61,7 +61,7 @@ enum ReceiverState: String {
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 1400 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.10.0"
+private let fallbackAppVersion = "1.10.1"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -647,14 +647,16 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let playlistURL = hlsDir.appendingPathComponent("live.m3u8")
         let segmentPattern = hlsDir.appendingPathComponent("segment-%03d.ts").path
         let cliLogURL = hlsDir.appendingPathComponent("siano-tv.log")
+        let filterLogURL = hlsDir.appendingPathComponent("ts-filter.log")
         let ffmpegLogURL = hlsDir.appendingPathComponent("ffmpeg.log")
         FileManager.default.createFile(atPath: cliLogURL.path, contents: nil)
+        FileManager.default.createFile(atPath: filterLogURL.path, contents: nil)
         FileManager.default.createFile(atPath: ffmpegLogURL.path, contents: nil)
 
         let sourceCommand = ([binary] + arguments).map(Self.shellQuote).joined(separator: " ")
         let command = [
             "set -o pipefail",
-            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 5000000 -analyzeduration 5000000 -fflags +genpts+discardcorrupt -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 3 -hls_list_size 10 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
+            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(binary)) ts-filter-media - - 2>> \(Self.shellQuote(filterLogURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 5000000 -analyzeduration 5000000 -fflags +genpts+discardcorrupt -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 3 -hls_list_size 10 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
         ].joined(separator: "; ")
 
         let process = Process()
@@ -702,7 +704,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         do {
             try process.run()
             setState(.watching, isFallback ? "Lendo stream MPEG-TS..." : "Sintonizando \(channel.title)...", isFallback ? outputURL.path : channel.subtitle)
-            updateDiagnostics(note: "HLS preparando em \(hlsDir.path)")
+            updateDiagnostics(note: "Filtro TS + HLS preparando em \(hlsDir.path)")
             schedulePlaybackProbe(outputURL, channelNumber: channel.number, binary: binary, channel: channel, isFallback: isFallback)
         } catch {
             setState(.error, isFallback ? "Falha no fallback TS" : "Falha ao iniciar recepcao", error.localizedDescription)
@@ -889,7 +891,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         playerView.player = player
         player.play()
         startExternalHLSAudioPlayback(playlistURL)
-        updateDiagnostics(note: "HLS broadcast buffer ativo; video direto + audio AAC")
+        updateDiagnostics(note: "TS filtrado + HLS broadcast ativo")
         hlsPlaybackTimer = nil
 
         playerReadinessTimer?.invalidate()

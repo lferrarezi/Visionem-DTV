@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-smart|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|ts-quality <file.ts>|watch-br <canal_fisico> [seconds] [out.ts]|recover-ts-br <canal_fisico> [seconds] [out.ts]|ts-probe-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-smart|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|ts-filter-media <in.ts|-> <out.ts|->|ts-quality <file.ts>|watch-br <canal_fisico> [seconds] [out.ts]|recover-ts-br <canal_fisico> [seconds] [out.ts]|ts-probe-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -2664,6 +2664,156 @@ static void ts_quality_print_top_pids(const ts_quality_t *quality) {
     }
 }
 
+
+#define TS_FILTER_PROBE_PACKETS 4096
+
+typedef struct ts_filter_pid_count {
+    unsigned int pid;
+    unsigned long packets;
+} ts_filter_pid_count_t;
+
+static int ts_filter_is_excluded_pid(unsigned int pid) {
+    return pid == 0x1fff || pid < 0x0020 || pid == 0x1fc8;
+}
+
+static void ts_filter_count_pid(ts_filter_pid_count_t *counts, unsigned int pid) {
+    if (pid >= TS_PID_COUNT || ts_filter_is_excluded_pid(pid)) {
+        return;
+    }
+    counts[pid].pid = pid;
+    counts[pid].packets++;
+}
+
+static void ts_filter_choose_media_pids(const ts_filter_pid_count_t *counts, unsigned int *pid_a, unsigned int *pid_b) {
+    unsigned int first = 0;
+    unsigned int second = 0;
+    unsigned long first_count = 0;
+    unsigned long second_count = 0;
+    for (unsigned int pid = 0; pid < TS_PID_COUNT; pid++) {
+        unsigned long packets = counts[pid].packets;
+        if (packets == 0) {
+            continue;
+        }
+        if (packets > first_count) {
+            second = first;
+            second_count = first_count;
+            first = pid;
+            first_count = packets;
+        } else if (packets > second_count) {
+            second = pid;
+            second_count = packets;
+        }
+    }
+    *pid_a = first;
+    *pid_b = second;
+}
+
+static int ts_filter_should_pass(unsigned int pid, unsigned int pid_a, unsigned int pid_b) {
+    return pid == pid_a || pid == pid_b || pid < 0x0020;
+}
+
+static int ts_filter_media_command(const char *in_path, const char *out_path) {
+    FILE *in = strcmp(in_path, "-") == 0 ? stdin : fopen(in_path, "rb");
+    if (!in) {
+        fprintf(stderr, "ts-filter-media failed: could not open %s: %s\n", in_path, strerror(errno));
+        return 1;
+    }
+    FILE *out = strcmp(out_path, "-") == 0 ? stdout : fopen(out_path, "wb");
+    if (!out) {
+        if (in != stdin) fclose(in);
+        fprintf(stderr, "ts-filter-media failed: could not open %s: %s\n", out_path, strerror(errno));
+        return 1;
+    }
+
+    unsigned char *probe = calloc(TS_FILTER_PROBE_PACKETS, 188);
+    ts_filter_pid_count_t *counts = calloc(TS_PID_COUNT, sizeof(ts_filter_pid_count_t));
+    if (!probe || !counts) {
+        free(probe);
+        free(counts);
+        if (in != stdin) fclose(in);
+        if (out != stdout) fclose(out);
+        fprintf(stderr, "ts-filter-media failed: out of memory\n");
+        return 1;
+    }
+
+    size_t probe_packets = 0;
+    unsigned long input_packets = 0;
+    unsigned long output_packets = 0;
+    unsigned long sync_errors = 0;
+    while (probe_packets < TS_FILTER_PROBE_PACKETS) {
+        unsigned char *packet = probe + (probe_packets * 188);
+        size_t n = fread(packet, 1, 188, in);
+        if (n == 0) {
+            break;
+        }
+        if (n != 188 || packet[0] != 0x47) {
+            sync_errors++;
+            break;
+        }
+        unsigned int pid = ((unsigned int)(packet[1] & 0x1f) << 8) | packet[2];
+        ts_filter_count_pid(counts, pid);
+        probe_packets++;
+        input_packets++;
+    }
+
+    unsigned int pid_a = 0;
+    unsigned int pid_b = 0;
+    ts_filter_choose_media_pids(counts, &pid_a, &pid_b);
+    fprintf(stderr, "siano-tv ts-filter-media\n");
+    fprintf(stderr, "  selected_pids: 0x%04x 0x%04x\n", pid_a, pid_b);
+    fprintf(stderr, "  probe_packets=%lu sync_errors=%lu\n", (unsigned long)probe_packets, sync_errors);
+
+    for (size_t i = 0; i < probe_packets; i++) {
+        unsigned char *packet = probe + (i * 188);
+        unsigned int pid = ((unsigned int)(packet[1] & 0x1f) << 8) | packet[2];
+        if (ts_filter_should_pass(pid, pid_a, pid_b)) {
+            if (fwrite(packet, 1, 188, out) != 188) {
+                free(probe);
+                free(counts);
+                if (in != stdin) fclose(in);
+                if (out != stdout) fclose(out);
+                fprintf(stderr, "ts-filter-media failed: write failed\n");
+                return 1;
+            }
+            output_packets++;
+        }
+    }
+
+    unsigned char packet[188];
+    while (1) {
+        size_t n = fread(packet, 1, 188, in);
+        if (n == 0) {
+            break;
+        }
+        if (n != 188 || packet[0] != 0x47) {
+            sync_errors++;
+            continue;
+        }
+        input_packets++;
+        unsigned int pid = ((unsigned int)(packet[1] & 0x1f) << 8) | packet[2];
+        if (!ts_filter_should_pass(pid, pid_a, pid_b)) {
+            continue;
+        }
+        if (fwrite(packet, 1, 188, out) != 188) {
+            free(probe);
+            free(counts);
+            if (in != stdin) fclose(in);
+            if (out != stdout) fclose(out);
+            fprintf(stderr, "ts-filter-media failed: write failed\n");
+            return 1;
+        }
+        output_packets++;
+    }
+    fflush(out);
+    fprintf(stderr, "  final input_packets=%lu output_packets=%lu sync_errors=%lu\n", input_packets, output_packets, sync_errors);
+
+    free(probe);
+    free(counts);
+    if (in != stdin) fclose(in);
+    if (out != stdout) fclose(out);
+    return output_packets > 0 ? 0 : 1;
+}
+
 static int ts_quality_command(const char *path) {
     FILE *file = fopen(path, "rb");
     if (!file) {
@@ -2777,6 +2927,10 @@ int main(int argc, char **argv) {
     if (argc == 4 && strcmp(argv[1], "dump-ts") == 0) {
         return dump_ts_command(argv[2], argv[3]);
     }
+    if (argc == 4 && strcmp(argv[1], "ts-filter-media") == 0) {
+        return ts_filter_media_command(argv[2], argv[3]);
+    }
+
     if (argc == 3 && strcmp(argv[1], "ts-quality") == 0) {
         return ts_quality_command(argv[2]);
     }
