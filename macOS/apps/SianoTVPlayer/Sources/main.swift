@@ -59,9 +59,9 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let minimumHLSStartBytes = 700 * 1024
+private let minimumHLSStartBytes = 420 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.9.8"
+private let fallbackAppVersion = "1.9.9"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -654,7 +654,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let sourceCommand = ([binary] + arguments).map(Self.shellQuote).joined(separator: " ")
         let command = [
             "set -o pipefail",
-            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 524288 -analyzeduration 1000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -vf format=yuv420p -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.0 -g 30 -keyint_min 30 -sc_threshold 0 -b:v 700k -maxrate 900k -bufsize 1400k -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
+            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 1048576 -analyzeduration 1500000 -fflags +genpts+discardcorrupt+nobuffer -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 1 -hls_list_size 8 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
         ].joined(separator: "; ")
 
         let process = Process()
@@ -744,7 +744,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     if let playlistURL = self.hlsPlaylistURL,
                        size > minimumHLSStartBytes,
                        FileManager.default.fileExists(atPath: playlistURL.path),
-                       segmentCount >= 3 {
+                       segmentCount >= 2 {
                         self.activateHLSPlayback(playlistURL)
                         self.playbackTimer?.invalidate()
                         self.playbackTimer = nil
@@ -850,7 +850,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let command = [
             "/usr/bin/tail -c +1 -f \(Self.shellQuote(outputURL.path))",
-            "\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 524288 -analyzeduration 1000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -vf format=yuv420p -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.0 -g 30 -keyint_min 30 -sc_threshold 0 -b:v 700k -maxrate 900k -bufsize 1400k -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path))"
+            "\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 1048576 -analyzeduration 1500000 -fflags +genpts+discardcorrupt+nobuffer -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 1 -hls_list_size 8 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path))"
         ].joined(separator: " | ")
 
         let process = Process()
@@ -887,7 +887,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         playerView.player = player
         player.play()
         startExternalHLSAudioPlayback(playlistURL)
-        updateDiagnostics(note: "HLS ativo; audio AAC validado")
+        updateDiagnostics(note: "HLS ativo; video direto + audio AAC")
         hlsPlaybackTimer = nil
 
         playerReadinessTimer?.invalidate()
@@ -1294,16 +1294,49 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return [] }
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        var names: [String] = []
-        var seen = Set<String>()
+        var grouped: [String: String] = [:]
+        var order: [String] = []
         for line in output.split(separator: "\n") {
-            let name = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = name.lowercased()
-            guard !name.isEmpty, key != "unknown", !seen.contains(key) else { continue }
-            seen.insert(key)
-            names.append(name)
+            let rawName = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = normalizedServiceKey(rawName)
+            guard !rawName.isEmpty, key != "unknown" else { continue }
+            if grouped[key] == nil {
+                order.append(key)
+                grouped[key] = displayServiceName(rawName)
+            } else if serviceNamePriority(rawName) > serviceNamePriority(grouped[key] ?? "") {
+                grouped[key] = displayServiceName(rawName)
+            }
         }
-        return names
+        return order.compactMap { grouped[$0] }
+    }
+
+    nonisolated private static func normalizedServiceKey(_ name: String) -> String {
+        let lowercased = name.lowercased()
+        let tokensToRemove = ["hd", "1seg", "1 seg", "one seg", "oneseg", "sd", "tv"]
+        let normalized = tokensToRemove.reduce(lowercased) { partial, token in
+            partial.replacingOccurrences(of: token, with: " ")
+        }
+        return normalized
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func displayServiceName(_ name: String) -> String {
+        let key = normalizedServiceKey(name)
+        guard !key.isEmpty else { return name }
+        let words = key.split(separator: " ").map { word in
+            word.prefix(1).uppercased() + word.dropFirst()
+        }
+        return words.joined(separator: " ")
+    }
+
+    nonisolated private static func serviceNamePriority(_ name: String) -> Int {
+        let lowercased = name.lowercased()
+        if lowercased.contains("1seg") || lowercased.contains("1 seg") { return 0 }
+        if lowercased.contains("hd") { return 2 }
+        return 1
     }
 
     nonisolated private static func findExecutable(_ candidates: [String]) -> String? {

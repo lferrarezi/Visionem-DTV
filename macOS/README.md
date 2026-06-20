@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.9.8`.
+Versao local: `1.9.9`.
 
 ## Estado Atual
 
@@ -141,7 +141,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-dtv-1.9.8-macos-installer.pkg
+dist/visionem-dtv-1.9.9-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -222,3 +222,9 @@ Ao selecionar um canal, o app executa `/usr/local/bin/siano-tv recover-ts-br <ca
 ## Licenca
 
 Este projeto e distribuido sob a licenca MIT. Consulte [../LICENSE](../LICENSE).
+
+
+### 1.9.9
+
+- HLS passa a preservar o video H.264 original quando possivel, reduzindo carga e travamentos de transcode.
+- Lista de canais consolida variantes de uma mesma emissora, como HD e 1seg, em uma unica entrada assistivel.
