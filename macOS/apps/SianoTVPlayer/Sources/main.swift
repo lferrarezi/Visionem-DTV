@@ -60,7 +60,7 @@ enum ReceiverState: String {
 
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 700 * 1024
-private let fallbackAppVersion = "1.9.3"
+private let fallbackAppVersion = "1.9.4"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -646,7 +646,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let sourceCommand = ([binary] + arguments).map(Self.shellQuote).joined(separator: " ")
         let command = [
             "set -o pipefail",
-            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 10000000 -analyzeduration 10000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -vf fps=30000/1001,format=yuv420p -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.0 -g 30 -keyint_min 30 -sc_threshold 0 -b:v 700k -maxrate 900k -bufsize 1400k -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
+            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 10000000 -analyzeduration 10000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -vf format=yuv420p -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.0 -g 30 -keyint_min 30 -sc_threshold 0 -b:v 700k -maxrate 900k -bufsize 1400k -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
         ].joined(separator: "; ")
 
         let process = Process()
@@ -796,7 +796,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let command = [
             "/usr/bin/tail -c +1 -f \(Self.shellQuote(outputURL.path))",
-            "\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 10000000 -analyzeduration 10000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -vf fps=30000/1001,format=yuv420p -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.0 -g 30 -keyint_min 30 -sc_threshold 0 -b:v 700k -maxrate 900k -bufsize 1400k -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path))"
+            "\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 10000000 -analyzeduration 10000000 -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0 -map 0:a:0 -vf format=yuv420p -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.0 -g 30 -keyint_min 30 -sc_threshold 0 -b:v 700k -maxrate 900k -bufsize 1400k -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path))"
         ].joined(separator: " | ")
 
         let process = Process()
@@ -828,7 +828,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func activateHLSPlayback(_ playlistURL: URL) {
         let item = AVPlayerItem(url: playlistURL)
         let player = AVPlayer(playerItem: item)
-        player.isMuted = true
+        player.isMuted = false
         playerView.player = player
         player.play()
         updateDiagnostics(note: "HLS ativo; validando video do AVPlayer")
@@ -848,6 +848,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     let hasVideoSize = item.presentationSize.width > 0 && item.presentationSize.height > 0
                     self.updateDiagnostics(note: "AVPlayer pronto video=\(Int(item.presentationSize.width))x\(Int(item.presentationSize.height))")
                     if hasVideoSize {
+                        self.stopExternalAudioPlayback()
                         self.frameTimer?.invalidate()
                         self.frameTimer = nil
                         self.frameView.isHidden = true
