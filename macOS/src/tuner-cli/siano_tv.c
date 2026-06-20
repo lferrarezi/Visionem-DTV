@@ -1045,6 +1045,25 @@ static const char *segment_name(uint32_t segment_width) {
     }
 }
 
+static int parse_segment_name(const char *name, uint32_t *segment_width) {
+    if (!name || !*name || !segment_width) {
+        return -1;
+    }
+    if (strcmp(name, "1seg") == 0 || strcmp(name, "1") == 0) {
+        *segment_width = SMS_BW_ISDBT_1SEG;
+        return 0;
+    }
+    if (strcmp(name, "3seg") == 0 || strcmp(name, "3") == 0) {
+        *segment_width = SMS_BW_ISDBT_3SEG;
+        return 0;
+    }
+    if (strcmp(name, "13seg") == 0 || strcmp(name, "13") == 0) {
+        *segment_width = SMS_BW_ISDBT_13SEG;
+        return 0;
+    }
+    return -1;
+}
+
 static int stats_score(const sms_isdbt_stats_summary_t *stats) {
     int score = 0;
     if (stats->is_rf_locked) {
@@ -1781,6 +1800,17 @@ static int choose_watch_mode(smsusb_device_t *device, uint32_t frequency, uint32
     int best_score = -2147483647;
     uint32_t best_mode = SMS_BW_ISDBT_13SEG;
     char last_error[256] = "";
+    const char *forced_segment = getenv("SIANO_TV_FORCE_SEGMENT");
+    if (forced_segment && *forced_segment) {
+        uint32_t forced_mode = 0;
+        if (parse_segment_name(forced_segment, &forced_mode) != 0) {
+            snprintf(error, error_len, "invalid SIANO_TV_FORCE_SEGMENT=%s", forced_segment);
+            return -1;
+        }
+        printf("  autotune: modo forcado %s\n", segment_name(forced_mode));
+        *mode_out = forced_mode;
+        return smsusb_tune_isdbt_segment(device, frequency, forced_mode, error, error_len);
+    }
 
     printf("  autotune: testando 1seg, 13seg e 3seg\n");
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
@@ -2119,6 +2149,7 @@ static int ts_probe_br_command(int argc, char **argv) {
         fprintf(stderr, "ts-probe-br failed: could not open %s: %s\n", out_path, strerror(errno));
         return 1;
     }
+    setvbuf(out, NULL, _IOFBF, raw_stdout ? 64 * 1024 : 1024 * 1024);
 
     smsusb_device_t device;
     char error[256];
@@ -2221,7 +2252,6 @@ static int ts_probe_br_command(int argc, char **argv) {
                     rc = -1;
                     break;
                 }
-                fflush(out);
                 total += payload_len;
                 ts_messages++;
             } else {
@@ -2247,6 +2277,7 @@ static int ts_probe_br_command(int argc, char **argv) {
                    non_ts_messages,
                    timeouts,
                    (unsigned long)total);
+            fflush(out);
             fflush(log);
             next_report = now + 1;
         }
@@ -2401,6 +2432,7 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
         fprintf(stderr, "dump-ts failed: could not open %s: %s\n", out_path, strerror(errno));
         return 1;
     }
+    setvbuf(out, NULL, _IOFBF, raw_stdout ? 64 * 1024 : 1024 * 1024);
 
     smsusb_device_t device;
     char error[256];
@@ -2444,7 +2476,6 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
                     rc = -1;
                     break;
                 }
-                fflush(out);
                 total += payload_len;
             }
             messages++;
@@ -2457,6 +2488,7 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
                    messages,
                    timeouts,
                    (unsigned long)total);
+            fflush(out);
             fflush(log);
             next_stats = now + 1;
         }

@@ -61,7 +61,7 @@ enum ReceiverState: String {
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 1400 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.10.2"
+private let fallbackAppVersion = "1.10.3"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
