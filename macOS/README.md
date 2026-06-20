@@ -2,9 +2,20 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.9.4`.
+Versao local: `1.9.5`.
 
 ## Estado Atual
+
+## Diagnostico de Qualidade TS
+
+Use `ts-quality` para separar problema de recepcao/TS de problema de player:
+
+```bash
+./build/siano-tv ts-quality ~/Movies/SianoTV/fluxo-0.ts
+```
+
+O relatorio mostra pacotes MPEG-TS, erros de sync, erros de continuidade, PAT/PMT e os PIDs mais ativos. Em recepcao 1seg brasileira, os PIDs de midia observados neste receptor costumam aparecer como `0x0211` (video) e `0x0212` (audio) mesmo quando a janela capturada nao contem PAT/PMT.
+
 
 O dispositivo local foi identificado no macOS como:
 
@@ -130,7 +141,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-dtv-1.9.4-macos-installer.pkg
+dist/visionem-dtv-1.9.5-macos-installer.pkg
 ```
 
 O instalador coloca:

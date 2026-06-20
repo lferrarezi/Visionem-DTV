@@ -60,7 +60,7 @@ enum ReceiverState: String {
 
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 700 * 1024
-private let fallbackAppVersion = "1.9.4"
+private let fallbackAppVersion = "1.9.5"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -85,6 +85,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var frameTimer: Timer?
     private var hlsPlaybackTimer: Timer?
     private var playerReadinessTimer: Timer?
+    private var didRunTSQualityCheck = false
     private var hlsProcess: Process?
     private var hlsDirectoryURL: URL?
     private var hlsPlaylistURL: URL?
@@ -144,6 +145,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         sidebarEffect.addSubview(sidebar)
 
         playerView.controlsStyle = .inline
+        playerView.videoGravity = .resizeAspect
         playerView.translatesAutoresizingMaskIntoConstraints = false
         frameView.imageScaling = .scaleProportionallyUpOrDown
         frameView.wantsLayer = true
@@ -370,6 +372,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         stopHLSPlayback()
         playerReadinessTimer?.invalidate()
         playerReadinessTimer = nil
+        didRunTSQualityCheck = false
         stopExternalAudioPlayback()
         currentOutputURL = nil
         playerView.player?.pause()
@@ -659,6 +662,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         watchOutputPipe = pipe
         hlsDirectoryURL = hlsDir
         hlsPlaylistURL = playlistURL
+        didRunTSQualityCheck = false
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -728,6 +732,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                         self.setState(.streaming, "Recebendo transmissao", outputURL.path)
                     }
                     let segmentCount = self.hlsDirectoryURL.map { Self.hlsSegmentCount(in: $0) } ?? 0
+                    if !self.didRunTSQualityCheck && size > minimumHLSStartBytes {
+                        self.didRunTSQualityCheck = true
+                        self.runTSQualityCheck(binary: binary, outputURL: outputURL)
+                    }
                     if let playlistURL = self.hlsPlaylistURL,
                        size > minimumHLSStartBytes,
                        FileManager.default.fileExists(atPath: playlistURL.path),
@@ -760,6 +768,46 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 }
             }
         }
+    }
+
+
+    private func runTSQualityCheck(binary: String, outputURL: URL) {
+        DispatchQueue.global(qos: .utility).async {
+            let result = Self.runSianoTV(binary: binary, arguments: ["ts-quality", outputURL.path], timeout: 6)
+            let summary = Self.summarizeTSQuality(result.output)
+            DispatchQueue.main.async {
+                self.updateDiagnostics(note: summary)
+            }
+        }
+    }
+
+    nonisolated private static func summarizeTSQuality(_ text: String) -> String {
+        var sync = "?"
+        var continuity = "?"
+        var video = "missing"
+        var audio = "missing"
+        var topMedia: [String] = []
+        for rawLine in text.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("sync_errors:") {
+                sync = line.replacingOccurrences(of: "sync_errors:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("continuity_errors:") {
+                continuity = line.replacingOccurrences(of: "continuity_errors:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("video_pid:") {
+                video = line.replacingOccurrences(of: "video_pid:", with: "v").components(separatedBy: " ").prefix(3).joined(separator: " ")
+            } else if line.hasPrefix("audio_pid:") {
+                audio = line.replacingOccurrences(of: "audio_pid:", with: "a").components(separatedBy: " ").prefix(3).joined(separator: " ")
+            } else if line.hasPrefix("pid 0x") && !line.contains("0x1fff") && topMedia.count < 2 {
+                topMedia.append(line.replacingOccurrences(of: "pid ", with: ""))
+            }
+        }
+        if video.contains("missing"), topMedia.count > 0 {
+            video = "v? " + topMedia[0]
+        }
+        if audio.contains("missing"), topMedia.count > 1 {
+            audio = "a? " + topMedia[1]
+        }
+        return "TS quality sync=\(sync) continuity=\(continuity) \(video) \(audio)"
     }
 
     private func startFramePreview(_ outputURL: URL) {

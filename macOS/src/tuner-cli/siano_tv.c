@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-smart|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|watch-br <canal_fisico> [seconds] [out.ts]|recover-ts-br <canal_fisico> [seconds] [out.ts]|ts-probe-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
+    fprintf(stderr, "Usage: %s probe|version|usb-state|usb-reset|firmware-path|firmware-load <path>|init-isdbt|init-isdbt-bda|prepare-reception|tune-isdbt <frequency_hz>|stats-isdbt <frequency_hz>|stats-isdbt-ex <frequency_hz>|channels-br|channels-br-extended|scan-br|scan-br-smart|scan-br-extended|diag-br <canal_fisico> [seconds_per_trial] [csv_path]|debug-channel-br <canal_fisico> [seconds_per_mode]|pid-list-br <canal_fisico>|stream-kick-br <canal_fisico> [enable-ts,data-pump,raw-capture,data:req:res:value,header:req:res]|dump-ts <seconds> <out.ts>|ts-quality <file.ts>|watch-br <canal_fisico> [seconds] [out.ts]|recover-ts-br <canal_fisico> [seconds] [out.ts]|ts-probe-br <canal_fisico> [seconds] [out.ts]|debug-read <frequency_hz> <seconds>|capture-isdbt <frequency_hz> <seconds> <out.ts>|watch-isdbt <frequency_hz> <seconds> <out.ts>\n", argv0);
 }
 
 #define BR_SCAN_MIN_CHANNEL 1
@@ -2478,6 +2478,242 @@ static int dump_ts_command(const char *seconds_text, const char *out_path) {
     return total > 0 ? 0 : 1;
 }
 
+#define TS_PID_COUNT 8192
+
+typedef struct ts_pid_quality {
+    unsigned long packets;
+    unsigned long continuity_errors;
+    int last_continuity;
+    int has_last_continuity;
+} ts_pid_quality_t;
+
+typedef struct ts_quality {
+    unsigned long packets;
+    unsigned long sync_errors;
+    unsigned long transport_errors;
+    unsigned long continuity_errors;
+    unsigned long null_packets;
+    unsigned int pmt_pid;
+    int pat_present;
+    int pmt_present;
+    unsigned int video_pid;
+    unsigned int audio_pid;
+    ts_pid_quality_t pids[TS_PID_COUNT];
+} ts_quality_t;
+
+static int ts_stream_type_is_video(unsigned int stream_type) {
+    return stream_type == 0x01 || stream_type == 0x02 || stream_type == 0x10 || stream_type == 0x1b || stream_type == 0x24;
+}
+
+static int ts_stream_type_is_audio(unsigned int stream_type) {
+    return stream_type == 0x03 || stream_type == 0x04 || stream_type == 0x0f || stream_type == 0x11 || stream_type == 0x81;
+}
+
+static int ts_payload_offset(const unsigned char *packet) {
+    unsigned int adaptation_control = (packet[3] >> 4) & 0x03;
+    if (adaptation_control == 0 || adaptation_control == 2) {
+        return -1;
+    }
+    int offset = 4;
+    if (adaptation_control == 3) {
+        offset += 1 + packet[4];
+    }
+    return offset < 188 ? offset : -1;
+}
+
+static void parse_pat_section(ts_quality_t *quality, const unsigned char *payload, int payload_len) {
+    if (payload_len < 9) {
+        return;
+    }
+    int pointer = payload[0];
+    if (pointer + 8 >= payload_len) {
+        return;
+    }
+    const unsigned char *section = payload + 1 + pointer;
+    int section_len = payload_len - 1 - pointer;
+    if (section_len < 12 || section[0] != 0x00) {
+        return;
+    }
+    int declared_len = ((section[1] & 0x0f) << 8) | section[2];
+    if (declared_len + 3 > section_len || declared_len < 9) {
+        return;
+    }
+    int entries_end = 3 + declared_len - 4;
+    for (int pos = 8; pos + 3 < entries_end; pos += 4) {
+        unsigned int program = ((unsigned int)section[pos] << 8) | section[pos + 1];
+        unsigned int pid = ((unsigned int)(section[pos + 2] & 0x1f) << 8) | section[pos + 3];
+        if (program != 0) {
+            quality->pat_present = 1;
+            quality->pmt_pid = pid;
+            return;
+        }
+    }
+}
+
+static void parse_pmt_section(ts_quality_t *quality, const unsigned char *payload, int payload_len, unsigned int pid) {
+    if (pid != quality->pmt_pid || payload_len < 13) {
+        return;
+    }
+    int pointer = payload[0];
+    if (pointer + 12 >= payload_len) {
+        return;
+    }
+    const unsigned char *section = payload + 1 + pointer;
+    int section_len = payload_len - 1 - pointer;
+    if (section_len < 16 || section[0] != 0x02) {
+        return;
+    }
+    int declared_len = ((section[1] & 0x0f) << 8) | section[2];
+    if (declared_len + 3 > section_len || declared_len < 13) {
+        return;
+    }
+    int program_info_len = ((section[10] & 0x0f) << 8) | section[11];
+    int pos = 12 + program_info_len;
+    int entries_end = 3 + declared_len - 4;
+    while (pos + 4 < entries_end) {
+        unsigned int stream_type = section[pos];
+        unsigned int elementary_pid = ((unsigned int)(section[pos + 1] & 0x1f) << 8) | section[pos + 2];
+        unsigned int es_info_len = ((unsigned int)(section[pos + 3] & 0x0f) << 8) | section[pos + 4];
+        if (quality->video_pid == 0 && ts_stream_type_is_video(stream_type)) {
+            quality->video_pid = elementary_pid;
+        }
+        if (quality->audio_pid == 0 && ts_stream_type_is_audio(stream_type)) {
+            quality->audio_pid = elementary_pid;
+        }
+        quality->pmt_present = 1;
+        pos += 5 + (int)es_info_len;
+    }
+}
+
+static void ts_quality_process_packet(ts_quality_t *quality, const unsigned char *packet) {
+    if (packet[0] != 0x47) {
+        quality->sync_errors++;
+        return;
+    }
+    quality->packets++;
+    unsigned int pid = ((unsigned int)(packet[1] & 0x1f) << 8) | packet[2];
+    unsigned int continuity = packet[3] & 0x0f;
+    unsigned int adaptation_control = (packet[3] >> 4) & 0x03;
+    int has_payload = adaptation_control == 1 || adaptation_control == 3;
+    if (packet[1] & 0x80) {
+        quality->transport_errors++;
+    }
+    if (pid == 0x1fff) {
+        quality->null_packets++;
+    }
+    if (pid < TS_PID_COUNT) {
+        ts_pid_quality_t *pid_quality = &quality->pids[pid];
+        pid_quality->packets++;
+        if (has_payload && pid != 0x1fff) {
+            if (pid_quality->has_last_continuity) {
+                int expected = (pid_quality->last_continuity + 1) & 0x0f;
+                if ((int)continuity != expected) {
+                    pid_quality->continuity_errors++;
+                    quality->continuity_errors++;
+                }
+            }
+            pid_quality->last_continuity = (int)continuity;
+            pid_quality->has_last_continuity = 1;
+        }
+    }
+
+    int offset = ts_payload_offset(packet);
+    if (offset < 0 || !(packet[1] & 0x40)) {
+        return;
+    }
+    if (pid == 0x0000) {
+        parse_pat_section(quality, packet + offset, 188 - offset);
+    } else if (quality->pat_present && pid == quality->pmt_pid) {
+        parse_pmt_section(quality, packet + offset, 188 - offset, pid);
+    }
+}
+
+
+typedef struct ts_pid_summary {
+    unsigned int pid;
+    unsigned long packets;
+    unsigned long continuity_errors;
+} ts_pid_summary_t;
+
+static void ts_quality_print_top_pids(const ts_quality_t *quality) {
+    ts_pid_summary_t top[8];
+    memset(top, 0, sizeof(top));
+    for (unsigned int pid = 0; pid < TS_PID_COUNT; pid++) {
+        unsigned long packets = quality->pids[pid].packets;
+        if (packets == 0) {
+            continue;
+        }
+        for (size_t slot = 0; slot < sizeof(top) / sizeof(top[0]); slot++) {
+            if (packets > top[slot].packets) {
+                for (size_t move = (sizeof(top) / sizeof(top[0])) - 1; move > slot; move--) {
+                    top[move] = top[move - 1];
+                }
+                top[slot].pid = pid;
+                top[slot].packets = packets;
+                top[slot].continuity_errors = quality->pids[pid].continuity_errors;
+                break;
+            }
+        }
+    }
+    printf("  top_pids:\n");
+    for (size_t slot = 0; slot < sizeof(top) / sizeof(top[0]); slot++) {
+        if (top[slot].packets == 0) {
+            continue;
+        }
+        printf("    pid 0x%04x packets=%lu continuity_errors=%lu\n", top[slot].pid, top[slot].packets, top[slot].continuity_errors);
+    }
+}
+
+static int ts_quality_command(const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        fprintf(stderr, "ts-quality failed: could not open %s: %s\n", path, strerror(errno));
+        return 1;
+    }
+
+    ts_quality_t quality;
+    memset(&quality, 0, sizeof(quality));
+    unsigned char packet[188];
+    while (1) {
+        size_t read_len = fread(packet, 1, sizeof(packet), file);
+        if (read_len == 0) {
+            break;
+        }
+        if (read_len != sizeof(packet)) {
+            quality.sync_errors++;
+            break;
+        }
+        ts_quality_process_packet(&quality, packet);
+    }
+    fclose(file);
+
+    printf("siano-tv ts-quality\n");
+    printf("  file: %s\n", path);
+    printf("  packets: %lu\n", quality.packets);
+    printf("  sync_errors: %lu\n", quality.sync_errors);
+    printf("  transport_errors: %lu\n", quality.transport_errors);
+    printf("  continuity_errors: %lu\n", quality.continuity_errors);
+    printf("  null_packets: %lu\n", quality.null_packets);
+    printf("  pat: %s\n", quality.pat_present ? "present" : "missing");
+    if (quality.pmt_pid != 0) {
+        printf("  pmt: %s pid=0x%04x\n", quality.pmt_present ? "present" : "missing", quality.pmt_pid);
+    } else {
+        printf("  pmt: missing\n");
+    }
+    if (quality.video_pid != 0) {
+        printf("  video_pid: 0x%04x packets=%lu continuity_errors=%lu\n", quality.video_pid, quality.pids[quality.video_pid].packets, quality.pids[quality.video_pid].continuity_errors);
+    } else {
+        printf("  video_pid: missing\n");
+    }
+    if (quality.audio_pid != 0) {
+        printf("  audio_pid: 0x%04x packets=%lu continuity_errors=%lu\n", quality.audio_pid, quality.pids[quality.audio_pid].packets, quality.pids[quality.audio_pid].continuity_errors);
+    } else {
+        printf("  audio_pid: missing\n");
+    }
+    ts_quality_print_top_pids(&quality);
+    return quality.packets > 0 && quality.sync_errors == 0 ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -2540,6 +2776,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 4 && strcmp(argv[1], "dump-ts") == 0) {
         return dump_ts_command(argv[2], argv[3]);
+    }
+    if (argc == 3 && strcmp(argv[1], "ts-quality") == 0) {
+        return ts_quality_command(argv[2]);
     }
     if ((argc == 3 || argc == 4 || argc == 5) && strcmp(argv[1], "watch-br") == 0) {
         return watch_br_command(argc, argv);

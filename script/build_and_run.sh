@@ -88,6 +88,8 @@ WRAPPER
 </dict>
 </plist>
 PLIST
+  dot_clean -m "$APP_BUNDLE" >/dev/null 2>&1 || true
+  xattr -cr "$APP_BUNDLE" >/dev/null 2>&1 || true
   codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
 }
 
