@@ -59,9 +59,9 @@ enum ReceiverState: String {
 }
 
 private let minimumPreviewBytes = 160 * 1024
-private let minimumHLSStartBytes = 420 * 1024
+private let minimumHLSStartBytes = 1400 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.9.9"
+private let fallbackAppVersion = "1.10.0"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -654,7 +654,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let sourceCommand = ([binary] + arguments).map(Self.shellQuote).joined(separator: " ")
         let command = [
             "set -o pipefail",
-            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 1048576 -analyzeduration 1500000 -fflags +genpts+discardcorrupt+nobuffer -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 1 -hls_list_size 8 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
+            "\(sourceCommand) 2>> \(Self.shellQuote(cliLogURL.path)) | /usr/bin/tee \(Self.shellQuote(outputURL.path)) | \(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 5000000 -analyzeduration 5000000 -fflags +genpts+discardcorrupt -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 3 -hls_list_size 10 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path)) >> \(Self.shellQuote(ffmpegLogURL.path)) 2>&1"
         ].joined(separator: "; ")
 
         let process = Process()
@@ -744,7 +744,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                     if let playlistURL = self.hlsPlaylistURL,
                        size > minimumHLSStartBytes,
                        FileManager.default.fileExists(atPath: playlistURL.path),
-                       segmentCount >= 2 {
+                       segmentCount >= 4 {
                         self.activateHLSPlayback(playlistURL)
                         self.playbackTimer?.invalidate()
                         self.playbackTimer = nil
@@ -850,7 +850,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let command = [
             "/usr/bin/tail -c +1 -f \(Self.shellQuote(outputURL.path))",
-            "\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 1048576 -analyzeduration 1500000 -fflags +genpts+discardcorrupt+nobuffer -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 1 -hls_list_size 8 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path))"
+            "\(Self.shellQuote(ffmpeg)) -hide_banner -loglevel warning -y -f mpegts -probesize 5000000 -analyzeduration 5000000 -fflags +genpts+discardcorrupt -err_detect ignore_err -i pipe:0 -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 96k -ar 48000 -ac 2 -f hls -hls_time 3 -hls_list_size 10 -hls_flags delete_segments+append_list+omit_endlist+independent_segments -hls_segment_filename \(Self.shellQuote(segmentPattern)) \(Self.shellQuote(playlistURL.path))"
         ].joined(separator: " | ")
 
         let process = Process()
@@ -881,13 +881,15 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func activateHLSPlayback(_ playlistURL: URL) {
         let item = AVPlayerItem(url: playlistURL)
+        item.preferredForwardBufferDuration = 8
         let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = true
         player.isMuted = false
         player.volume = 1.0
         playerView.player = player
         player.play()
         startExternalHLSAudioPlayback(playlistURL)
-        updateDiagnostics(note: "HLS ativo; video direto + audio AAC")
+        updateDiagnostics(note: "HLS broadcast buffer ativo; video direto + audio AAC")
         hlsPlaybackTimer = nil
 
         playerReadinessTimer?.invalidate()
