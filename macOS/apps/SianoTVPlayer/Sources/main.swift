@@ -62,7 +62,7 @@ enum ReceiverState: String {
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 1400 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.10.4"
+private let fallbackAppVersion = "1.10.5"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -85,6 +85,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var currentOutputURL: URL?
     private var playbackTimer: Timer?
     private var frameTimer: Timer?
+    private var usbHealthTimer: Timer?
     private var hlsPlaybackTimer: Timer?
     private var playerReadinessTimer: Timer?
     private var didRunTSQualityCheck = false
@@ -114,6 +115,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         configureWindow()
         loadChannels()
         refreshUSBIndicator()
+        startUSBHealthMonitor()
     }
 
     func show() {
@@ -528,6 +530,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             setUSBIndicator(connected: false, detail: "siano-tv indisponivel")
             return
         }
+        guard scanProcess == nil, watchProcess == nil else {
+            return
+        }
 
         DispatchQueue.global(qos: .utility).async {
             let process = Process()
@@ -552,12 +557,31 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             let connected = text.contains("summary: mdtv=1") || text.contains("mdtv: present")
             var detail = connected ? "conectado" : "desconectado"
             var color: NSColor? = nil
+            var unresponsiveMessage: String? = nil
             if connected, case .unavailable(let message) = Self.receiverProtocolHealth(binary: binary), Self.indicatesUnresponsiveReceiver(message) {
                 detail = "firmware sem resposta"
                 color = .systemYellow
+                unresponsiveMessage = message
             }
             DispatchQueue.main.async {
                 self.setUSBIndicator(connected: connected, detail: detail, color: color)
+                if let unresponsiveMessage, self.scanProcess == nil, self.watchProcess == nil {
+                    switch self.receiverState {
+                    case .idle, .noSignal, .error, .firmwareUnresponsive:
+                        self.setUnavailableState(unresponsiveMessage)
+                    case .probing, .scanning, .watching, .streaming, .deviceBusy, .disconnected:
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private func startUSBHealthMonitor() {
+        usbHealthTimer?.invalidate()
+        usbHealthTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshUSBIndicator()
             }
         }
     }
