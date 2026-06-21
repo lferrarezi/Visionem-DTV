@@ -2,7 +2,7 @@
 
 Projeto para pesquisar e desenvolver suporte macOS para o receptor de TV digital USB vendido como Infinitoo TV Digital.
 
-Versao local: `1.10.3`.
+Versao local: `1.10.4`.
 
 ## Estado Atual
 
@@ -141,7 +141,7 @@ Para gerar o instalador macOS `.pkg`:
 Saida esperada:
 
 ```text
-dist/visionem-dtv-1.10.3-macos-installer.pkg
+dist/visionem-dtv-1.10.4-macos-installer.pkg
 ```
 
 O instalador coloca:
@@ -252,3 +252,9 @@ Este projeto e distribuido sob a licenca MIT. Consulte [../LICENSE](../LICENSE).
 
 - Reduz bloqueios no transporte TS removendo `fflush()` por mensagem em `ts-probe-br` e `dump-ts`.
 - Adiciona `SIANO_TV_FORCE_SEGMENT=1seg|13seg|3seg` para testes finos de estabilidade por modo ISDB-Tb.
+
+
+### 1.10.4
+
+- O app verifica `siano-tv version` antes de buscar ou assistir para detectar firmware travado no endpoint USB.
+- O indicador USB agora mostra estado amarelo quando o receptor esta conectado, mas o firmware nao responde.

@@ -55,13 +55,14 @@ enum ReceiverState: String {
     case deviceBusy = "Dispositivo ocupado"
     case noSignal = "Sem transmissao"
     case disconnected = "Receptor desconectado"
+    case firmwareUnresponsive = "Firmware sem resposta"
     case error = "Falha"
 }
 
 private let minimumPreviewBytes = 160 * 1024
 private let minimumHLSStartBytes = 1400 * 1024
 private let minimumTSQualityBytes = 256 * 1024
-private let fallbackAppVersion = "1.10.3"
+private let fallbackAppVersion = "1.10.4"
 
 @MainActor
 final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate {
@@ -500,7 +501,8 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if lowercased.contains("ocupado") || lowercased.contains("libusb_error_access") {
             setState(.deviceBusy, "Dispositivo ocupado", message)
         } else if Self.indicatesUnresponsiveReceiver(message) {
-            setState(.error, "Receptor sem resposta", message)
+            setState(.firmwareUnresponsive, "Firmware do receptor sem resposta", message)
+            setUSBIndicator(connected: true, detail: "firmware sem resposta", color: .systemYellow)
         } else if lowercased.contains("nao encontrado") ||
                     lowercased.contains("não encontrado") ||
                     lowercased.contains("desconectado") ||
@@ -548,16 +550,26 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             let data = output.fileHandleForReading.readDataToEndOfFile()
             let text = String(data: data, encoding: .utf8) ?? ""
             let connected = text.contains("summary: mdtv=1") || text.contains("mdtv: present")
+            var detail = connected ? "conectado" : "desconectado"
+            var color: NSColor? = nil
+            if connected, case .unavailable(let message) = Self.receiverProtocolHealth(binary: binary), Self.indicatesUnresponsiveReceiver(message) {
+                detail = "firmware sem resposta"
+                color = .systemYellow
+            }
             DispatchQueue.main.async {
-                self.setUSBIndicator(connected: connected, detail: connected ? "conectado" : "desconectado")
+                self.setUSBIndicator(connected: connected, detail: detail, color: color)
             }
         }
     }
 
-    private func setUSBIndicator(connected: Bool, detail: String) {
+    private func setUSBIndicator(connected: Bool, detail: String, color: NSColor? = nil) {
         isReceiverConnected = connected
-        usbIndicatorDot.layer?.backgroundColor = (connected ? NSColor.systemGreen : NSColor.systemRed).cgColor
-        usbIndicatorLabel.stringValue = connected ? "Receptor USB conectado" : "Receptor USB \(detail)"
+        usbIndicatorDot.layer?.backgroundColor = (color ?? (connected ? NSColor.systemGreen : NSColor.systemRed)).cgColor
+        if connected {
+            usbIndicatorLabel.stringValue = detail == "conectado" ? "Receptor USB conectado" : "Receptor USB conectado - \(detail)"
+        } else {
+            usbIndicatorLabel.stringValue = "Receptor USB \(detail)"
+        }
         updateDiagnostics(note: detailLabel.stringValue)
     }
 
@@ -618,6 +630,10 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard let binary = findSianoTVBinary() else {
             statusLabel.stringValue = "siano-tv nao encontrado"
             detailLabel.stringValue = "Instale o pacote ou compile o projeto antes de assistir"
+            return
+        }
+        if case .unavailable(let message) = Self.receiverProtocolHealth(binary: binary) {
+            setUnavailableState(message)
             return
         }
 
@@ -1421,6 +1437,9 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if !usbState.output.contains("summary: mdtv=1") && !usbState.output.contains("mdtv: present") {
             return .unavailable("Receptor USB nao encontrado. Reconecte o dongle e tente Buscar novamente. Diagnostico: \(usbState.output.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
+        if case .unavailable(let message) = receiverProtocolHealth(binary: binary) {
+            return .unavailable(message)
+        }
 
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("siano-tv-current-stream-\(UUID().uuidString).ts")
@@ -1464,6 +1483,24 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let serviceNames = detectServiceNames(in: outputURL)
         guard size > minimumPreviewBytes, !serviceNames.isEmpty else { return .none }
         return .found(TransmissionProbe(serviceNames: serviceNames, hasVideo: hasVideoStream(in: outputURL), bytes: size))
+    }
+
+    nonisolated private static func receiverProtocolHealth(binary: String) -> TransmissionProbeResult {
+        let version = runSianoTV(binary: binary, arguments: ["version"], timeout: 5)
+        if version.status == 0 {
+            return .none
+        }
+        let diagnostic = version.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if diagnostic.contains("LIBUSB_ERROR_ACCESS") {
+            return .unavailable("O receptor esta ocupado por outro processo. Feche o Visionem DTV antigo ou finalize processos siano-tv e tente Buscar novamente. Diagnostico: \(diagnostic)")
+        }
+        if indicatesUnresponsiveReceiver(diagnostic) {
+            return .unavailable("O receptor esta conectado, mas o firmware nao respondeu aos comandos USB. Reinsera fisicamente o dongle e tente Buscar novamente. Diagnostico: \(diagnostic)")
+        }
+        if diagnostic.contains("not found") || diagnostic.contains("not openable") {
+            return .unavailable("Receptor USB nao encontrado ou nao abriu. Reconecte o dongle e tente novamente. Diagnostico: \(diagnostic)")
+        }
+        return .unavailable("Falha ao verificar firmware do receptor. Diagnostico: \(diagnostic)")
     }
 
     nonisolated private static func detectConfirmedPhysicalChannels(binary: String, scanText: String) -> [TVChannel] {
@@ -1524,7 +1561,7 @@ final class SianoController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = arguments
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = pipe
         do {
             try process.run()
         } catch {
